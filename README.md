@@ -31,10 +31,10 @@ init.cmd
 1. 在 `.tmp\init-bootstrap` 创建临时引导环境并安装固定版本 `uv`。
 2. 下载并管理 Python 3.12。
 3. 创建项目 `.venv`，同步 `requirements.txt` 中锁定的运行时包。
-4. 下载固定版本的 Xberg、ONNX Runtime、OCR/Layout、SenseVoice 和 Silero VAD 资产。
-5. 对每个资产校验大小和 SHA-256，并执行包导入及 `xberg.exe --version` 检查。
+4. 从 `jchanghong023/xberg` 的 GitHub Latest Release 解析并下载最新 Windows CLI，再从该 CLI 的内置 `cache manifest` 解析与当前版本匹配的 OCR/Layout 模型；ONNX Runtime、SenseVoice 和 Silero VAD 使用安装清单中的固定版本。
+5. 对 Xberg 发布包、解压出的 CLI 和每个模型/运行时资产校验大小及 SHA-256，并执行包导入及 `xberg.exe --version` 检查。
 
-非 Python 资产约 573 MB；托管 Python、运行时包和下载缓存还会占用额外空间，建议至少预留 2 GB。初始化可安全重复执行：有效文件直接复用，缺失或损坏文件自动修复，不写“已安装”状态标记。下载中断后会尽量从临时分片续传。
+非 Python 资产约 573 MB；托管 Python、运行时包和下载缓存还会占用额外空间，建议至少预留 2 GB。初始化可安全重复执行：每次都会查询 Xberg Latest Release，并读取该版本内置的模型清单；当前版本及有效文件直接复用，发布更新、模型修订变化、缺失或损坏文件自动修复。解析出的 Xberg 发布身份、模型修订和校验值记录在本地 `release.json`；下载中断后会尽量从临时分片续传。
 
 校验失败时，`init.cmd` 返回非零状态，不接受未验证文件，也不会用失败下载覆盖已有最终文件。修复网络或镜像内容后重新运行即可。
 
@@ -44,10 +44,10 @@ init.cmd
 | --- | --- |
 | 项目运行环境 | `<项目目录>\.venv` |
 | 模型根目录 | `%USERPROFILE%\.models\all2markdown` |
-| Xberg 模型缓存 | `%USERPROFILE%\.models\all2markdown\xberg\v1.0.14\hf` |
+| Xberg 模型缓存 | `%USERPROFILE%\.models\all2markdown\xberg\latest\hf` |
 | 媒体模型 | `%USERPROFILE%\.models\all2markdown\sherpa_onnx\v1.13.6` |
-| Xberg 运行时 | `%LOCALAPPDATA%\all2markdown\xberg\v1.0.14\runtime` |
-| Xberg 提取缓存 | `%LOCALAPPDATA%\all2markdown\xberg\v1.0.14\cache` |
+| Xberg 运行时 | `%LOCALAPPDATA%\all2markdown\xberg\latest\runtime` |
+| Xberg 提取缓存 | `%LOCALAPPDATA%\all2markdown\xberg\latest\cache` |
 | 托管 Python | `%LOCALAPPDATA%\all2markdown\python` |
 | uv 下载缓存 | `%LOCALAPPDATA%\all2markdown\uv-cache` |
 | 上游安装时许可文件 | `%LOCALAPPDATA%\all2markdown\licenses` |
@@ -61,10 +61,10 @@ init.cmd
 | `ALL2MARKDOWN_MODEL_DIR` | 替换模型根目录。相对路径按项目根目录解析。 |
 | `ALL2MARKDOWN_DATA_DIR` | 替换运行时、缓存、托管 Python 和安装许可文件根目录。相对路径按项目根目录解析。 |
 | `ALL2MARKDOWN_PYPI_INDEX_URL` | 替换 Python 包索引，同时用于引导 pip 和 uv。 |
-| `ALL2MARKDOWN_ASSET_MIRROR_URL` | 替换全部非 Python 资产来源；按清单中的 `mirror_path` 拼接。设置后不会静默访问官方资产源。 |
+| `ALL2MARKDOWN_ASSET_MIRROR_URL` | 替换清单中的固定非 Python 资产来源；按 `mirror_path` 拼接。Latest Xberg 必须直接查询 GitHub，设置此变量时初始化会明确失败而不会回退官方源。 |
 | `UV_PYTHON_INSTALL_MIRROR` | 指定 uv 托管 Python 下载镜像。 |
 
-标准 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 等代理变量会由 Python、pip 和 uv 正常继承。索引、代理或镜像包含凭据时，初始化日志会隐藏凭据。无论使用官方源还是显式镜像，所有资产都必须通过同一份 `src/config/install_assets.json` 中的校验值。
+标准 `HTTP_PROXY`、`HTTPS_PROXY`、`NO_PROXY` 等代理变量会由 Python、pip 和 uv 正常继承。索引、代理或镜像包含凭据时，初始化日志会隐藏凭据。固定资产按 `src/config/install_assets.json` 校验；Latest Xberg 同时校验 GitHub Release API 返回的压缩包 SHA-256，并以该 CLI 的内置模型清单校验 OCR/Layout 模型，最终把发布、解压成员及模型校验值记录到本地状态。
 
 ## 使用
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import io
 import os
 import pathlib
@@ -224,6 +225,179 @@ class InitEnvAssetTest(unittest.TestCase):
         with self.assertRaises(init_env.InstallError):
             init_env._extract_archive_asset(missing_zip, output, valid_asset)
 
+    def test_latest_github_release_is_resolved_on_every_install(self) -> None:
+        asset = {
+            "id": "xberg-runtime",
+            "group": "xberg",
+            "kind": "github_release_zip_member",
+            "api_url": self.base_url + "/releases/latest",
+            "repository": "owner/xberg",
+            "asset_name": "xberg-cli-x86_64-pc-windows-msvc.zip",
+            "root": "runtime",
+            "relative_path": "xberg.exe",
+            "member_basename": "xberg.exe",
+        }
+
+        def publish(tag: str, executable: bytes) -> None:
+            archive_buffer = io.BytesIO()
+            with zipfile.ZipFile(archive_buffer, "w") as archive:
+                archive.writestr("xberg-cli/xberg.exe", executable)
+            archive_payload = archive_buffer.getvalue()
+            archive_path = "/downloads/{}.zip".format(tag)
+            self.server.payloads[archive_path] = archive_payload
+            self.server.payloads["/releases/latest"] = json.dumps(
+                {
+                    "tag_name": tag,
+                    "draft": False,
+                    "assets": [
+                        {
+                            "name": asset["asset_name"],
+                            "browser_download_url": self.base_url + archive_path,
+                            "size": len(archive_payload),
+                            "digest": "sha256:{}".format(
+                                hashlib.sha256(archive_payload).hexdigest()
+                            ),
+                        }
+                    ],
+                }
+            ).encode("utf-8")
+
+        publish("v2026.8.31-1750", b"xberg-v1")
+        self.assertFalse(
+            init_env.install_asset(asset, sleep=lambda _delay: None)
+        )
+        destination = runtime_paths.asset_path(asset)
+        self.assertEqual(destination.read_bytes(), b"xberg-v1")
+        self.assertEqual(
+            runtime_paths.load_xberg_release_state()["tag_name"],
+            "v2026.8.31-1750",
+        )
+
+        first_download_count = sum(
+            path == "/downloads/v2026.8.31-1750.zip"
+            for path, _range in self.server.requests
+        )
+        self.assertTrue(init_env.install_asset(asset, sleep=lambda _delay: None))
+        self.assertEqual(
+            sum(
+                path == "/downloads/v2026.8.31-1750.zip"
+                for path, _range in self.server.requests
+            ),
+            first_download_count,
+        )
+        self.assertEqual(
+            sum(path == "/releases/latest" for path, _range in self.server.requests),
+            2,
+        )
+
+        publish("v2026.8.31-1801", b"xberg-v2")
+        self.assertFalse(
+            init_env.install_asset(asset, sleep=lambda _delay: None)
+        )
+        self.assertEqual(destination.read_bytes(), b"xberg-v2")
+        self.assertEqual(
+            runtime_paths.load_xberg_release_state()["tag_name"],
+            "v2026.8.31-1801",
+        )
+
+        request_count = len(self.server.requests)
+        with self.assertRaisesRegex(init_env.InstallError, "显式资产镜像"):
+            init_env.install_asset(
+                asset,
+                mirror_url=self.base_url + "/mirror",
+                sleep=lambda _delay: None,
+            )
+        self.assertEqual(len(self.server.requests), request_count)
+
+    def test_xberg_models_are_resolved_from_installed_executable_manifest(self) -> None:
+        executable = runtime_paths.runtime_dir() / "xberg.exe"
+        executable.parent.mkdir(parents=True)
+        executable.write_bytes(b"xberg")
+        state_path = runtime_paths.xberg_release_state_path()
+        state_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "repository": "owner/xberg",
+                    "tag_name": "v2",
+                    "asset_name": "xberg.zip",
+                    "browser_download_url": "https://example.invalid/xberg.zip",
+                    "archive_sha256": "a" * 64,
+                    "archive_size_bytes": 10,
+                    "member_sha256": hashlib.sha256(b"xberg").hexdigest(),
+                    "member_size_bytes": 5,
+                }
+            ),
+            encoding="utf-8",
+        )
+        assets = [
+            {
+                "id": "paddle-det-tiny",
+                "group": "xberg",
+                "kind": "xberg_manifest_model",
+                "repository": "xberg-io/paddleocr-onnx-models",
+                "model_path": "v6/det/tiny/model.onnx",
+                "root": "model",
+                "relative_path": "unused",
+            },
+            {
+                "id": "layout-rtdetr",
+                "group": "xberg",
+                "kind": "xberg_manifest_model",
+                "repository": "xberg-io/layout-models",
+                "model_path": "rtdetr/model.onnx",
+                "root": "model",
+                "relative_path": "unused",
+            },
+        ]
+        payload = {
+            "xberg_version": "2.0.0",
+            "models": [
+                {
+                    "relative_path": "v6/det/tiny/model.onnx",
+                    "sha256": "b" * 64,
+                    "size_bytes": 123,
+                    "source_url": (
+                        "https://huggingface.co/xberg-io/paddleocr-onnx-models/"
+                        "resolve/revision-a/v6/det/tiny/model.onnx"
+                    ),
+                },
+                {
+                    "relative_path": "models--xberg-io--layout-models/snapshots/"
+                    "revision-b/rtdetr/model.onnx",
+                    "sha256": "c" * 64,
+                    "size_bytes": 456,
+                    "source_url": (
+                        "https://huggingface.co/xberg-io/layout-models/"
+                        "resolve/revision-b/rtdetr/model.onnx"
+                    ),
+                },
+            ],
+        }
+        with mock.patch.object(
+            init_env,
+            "run_command",
+            return_value=mock.Mock(stdout=json.dumps(payload)),
+        ):
+            resolved = init_env.resolve_xberg_manifest_models(assets)
+
+        self.assertEqual(resolved[0]["revision"], "revision-a")
+        self.assertEqual(
+            resolved[0]["relative_path"],
+            "xberg/latest/hf/models--xberg-io--paddleocr-onnx-models/"
+            "snapshots/revision-a/v6/det/tiny/model.onnx",
+        )
+        self.assertEqual(
+            resolved[1]["mirror_path"],
+            "huggingface/xberg-io/layout-models/revision-b/rtdetr/model.onnx",
+        )
+        installed = runtime_paths.install_assets_by_id()
+        self.assertEqual(installed["paddle-det-tiny"]["sha256"], "b" * 64)
+        self.assertEqual(installed["layout-rtdetr"]["size_bytes"], 456)
+        self.assertEqual(
+            runtime_paths.load_xberg_release_state()["xberg_version"], "2.0.0"
+        )
+
 
 class InitEnvBootstrapTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -297,11 +471,11 @@ class InitEnvBootstrapTest(unittest.TestCase):
         self.assertEqual(runtime_paths.data_root(), (self.tmp / "data").resolve())
         self.assertEqual(
             runtime_paths.hf_cache_dir(),
-            (self.tmp / "models" / "xberg" / "v1.0.14" / "hf").resolve(),
+            (self.tmp / "models" / "xberg" / "latest" / "hf").resolve(),
         )
         self.assertEqual(
             runtime_paths.runtime_dir(),
-            (self.tmp / "data" / "xberg" / "v1.0.14" / "runtime").resolve(),
+            (self.tmp / "data" / "xberg" / "latest" / "runtime").resolve(),
         )
         with mock.patch.dict(
             os.environ,

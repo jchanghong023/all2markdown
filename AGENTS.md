@@ -14,10 +14,10 @@
 ## 平台、安装与离线要求
 
 - 仅支持 Windows 11 x64、纯 CPU、AVX2。初始化可使用预装的 Windows x64 Python 3.8+；产品执行固定使用 uv 管理的 Python 3.12 和项目 `.venv`。
-- `init.cmd` 是唯一安装入口；它可以联网下载托管 Python、锁定包和固定资产。转换阶段必须强制离线，不得联网补下载或读取无关的用户历史缓存。
-- Xberg 固定 v1.0.14（commit `18be764`），ONNX Runtime 固定 1.24.2。运行时安装到 `%LOCALAPPDATA%\all2markdown\xberg\v1.0.14\runtime`（或 `ALL2MARKDOWN_DATA_DIR` 对应位置）。
-- Xberg/OCR/Layout 模型安装到 `%USERPROFILE%\.models\all2markdown\xberg\v1.0.14`，媒体模型安装到同一模型根目录的 `sherpa_onnx\v1.13.6`（或 `ALL2MARKDOWN_MODEL_DIR` 对应位置）。
-- `src/config/install_assets.json` 是非 Python 资产 URL、镜像路径、目标路径、大小和 SHA-256 的唯一来源；初始化必须校验 SHA-256，转换预检必须校验存在性和大小。
+- `init.cmd` 是唯一安装入口；它可以联网下载托管 Python、锁定包和初始化资产。转换阶段必须强制离线，不得联网补下载或读取无关的用户历史缓存。
+- Xberg 每次初始化都从 `jchanghong023/xberg` 的 GitHub Latest Release 解析并安装最新 Windows x64 CLI；ONNX Runtime 固定 1.24.2。运行时和解析出的发布身份安装到 `%LOCALAPPDATA%\all2markdown\xberg\latest`（或 `ALL2MARKDOWN_DATA_DIR` 对应位置）。
+- Xberg/OCR/Layout 模型安装到 `%USERPROFILE%\.models\all2markdown\xberg\latest`，其修订、大小和 SHA-256 必须从当前 Latest Xberg CLI 的内置 `cache manifest` 解析；媒体模型安装到同一模型根目录的 `sherpa_onnx\v1.13.6`（或 `ALL2MARKDOWN_MODEL_DIR` 对应位置）。
+- `src/config/install_assets.json` 是非 Python 固定资产及动态 Xberg/Xberg 模型选择器的唯一来源；动态发布标签、URL、压缩包、成员及匹配模型校验值原子记录到本地 `release.json`。初始化必须校验 SHA-256，转换预检必须离线校验存在性和大小。
 - 媒体链路固定 sherpa-onnx 1.13.6、PyAV 18.1.0、NumPy 2.5.2；不得改变 Mandarin、ITN、Silero VAD 或 CPU provider 行为。
 - `requirements.txt` 只含运行时包，`requirements-dev.txt` 只增加测试夹具依赖；所有包版本必须使用 `==` 锁定。
 - 不得使用 Git LFS，不得提交运行时、模型、wheel、Python 解释器、下载缓存或安装产物。仓库只保留安装清单和 `licenses/third_party/` 下的小型许可/归属文本。

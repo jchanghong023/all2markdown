@@ -9,7 +9,7 @@ Only the following responsibilities live in Python:
   * logging and per-file error isolation
 
 All document parsing, OCR, layout and embedded-object recursion is done by the
-pinned Xberg v1.0.14 Windows runtime installed and verified by ``init.cmd``.
+latest Xberg Windows runtime installed and verified by ``init.cmd``.
 
 Routing: ``.mp4`` and ``.m4a`` inputs use the local PyAV -> Silero VAD ->
 sherpa-onnx SenseVoice INT8 path by default. ``media_transcription_backend``
@@ -94,10 +94,9 @@ CONCURRENT_REQUESTS = 1   # client-side pool of single-file /extract requests
 REQUEST_TIMEOUT = 21600   # default per-file timeout in seconds (--timeout overrides)
 XBERG_DEFAULT_MAX_REQUEST_BODY_BYTES = 100 * 1024 * 1024
 
-# Per-file heartbeat: Xberg v1.0.14 exposes no per-page progress (/extract-async
-# job status is only pending/running/completed/failed and jobs expire after 5
-# minutes), so long-running files would otherwise print nothing until the final
-# line. Every interval the worker logs elapsed time plus the server process's
+# Per-file heartbeat keeps long-running files observable even when the Xberg
+# endpoint emits no per-page events. Every interval the worker logs elapsed
+# time plus the server process's aggregate CPU and RSS, if psutil is available.
 # CPU-time delta (ctypes, stdlib-only) so the console shows the file is alive
 # and how hard it is computing. Overridable via XBERG_HEARTBEAT_SECONDS (tests).
 HEARTBEAT_INTERVAL = float(os.environ.get("XBERG_HEARTBEAT_SECONDS", "30"))
@@ -149,9 +148,8 @@ def tail_server_log(
 ) -> None:
     """Forward new lines from the Xberg server log to the console logger.
 
-    Xberg v1.0.14's tracing only emits lifecycle/config warnings (no per-page
-    or per-stage timings, see §11), but those events are still useful while a
-    file runs for tens of minutes: model loads, cache hits, xref warnings.
+    Xberg's tracing events remain useful while a file runs for tens of minutes:
+    model loads, cache hits, lifecycle/config warnings, and xref warnings.
     The server output uses ANSI colors; they are stripped for the console.
     """
     log = _log()
@@ -176,11 +174,9 @@ def tail_server_log(
     except Exception as exc:  # noqa: BLE001
         log.warning("[XBERG] 服务端日志转发停止: %s", exc)
 
-# Explicit MIME hints for the core formats. Xberg v1.0.14's magic-byte sniff
-# only inspects the first 4096 bytes of a file; OOXML packages whose
-# word/document.xml / ppt/presentation.xml / xl/workbook.xml entry sits beyond
-# that window are misdetected as plain application/zip and rendered as an
-# archive listing. Sending a validated mime_type bypasses the faulty sniff.
+# Explicit MIME hints for core formats avoid relying solely on magic-byte
+# sniffing. OOXML package markers may occur beyond a small prefix and otherwise
+# look like plain application/zip; a validated MIME type avoids that ambiguity.
 EXT_TO_MIME = {
     ".pdf": "application/pdf",
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -199,12 +195,8 @@ EXT_TO_MIME = {
     ".xlam": "application/vnd.ms-excel.addin.macroEnabled.12",
 }
 
-# PPTX-family inputs are sent as base64 bytes instead of a URI. Xberg v1.0.14
-# PptxExtractor overrides extract_path (pptx.rs:389) and that path omits the
-# ppt/embeddings/ embedded-object scan, silently dropping embedded documents;
-# the scan only runs in extract_content (pptx.rs:361), which the bytes input
-# route reaches. DOCX needs no such workaround (it uses the trait default
-# extract_path -> extract_content).
+# PPTX-family inputs are sent as base64 bytes so the content extraction route
+# consistently performs embedded-document scanning.
 BYTES_INPUT_EXTENSIONS = {".pptx", ".pptm", ".ppsx", ".potx", ".potm"}
 
 # Inputs handled by Xberg's raster ImageExtractor. Only these get the
@@ -747,10 +739,8 @@ def _wrap_ocr_literal(text: str) -> str:
 def collapse_whole_document_duplicate(text: str) -> str:
     """Drop the repeated second half of a whole-image OCR document.
 
-    Xberg v1.0.14's image path emits the OCR text twice for image inputs:
-    once as paragraphs (build_image_internal_document) and once when the
-    trailing Image element is rendered as its OCR text (ocr_text_only).
-    The two halves are byte-identical, so when the blank-line-separated
+    Some Xberg image extraction paths can emit OCR text both as paragraphs and
+    as the trailing Image element's OCR text. When the blank-line-separated
     block sequence is exactly duplicated, keep only the first half.
     """
     stripped = text.strip("\n")
@@ -1056,7 +1046,7 @@ def fast_mode_config(base: dict[str, Any]) -> dict[str, Any]:
     """Fast-mode config for large documents (page count > threshold).
 
     Derived from the normal config; the expensive visual steps are turned off.
-    Keys verified against the vendored Xberg v1.0.14 source:
+    The keys are part of the Xberg CLI configuration used by the latest release:
 
     * ``layout: null`` disables RT-DETR + TATR entirely -- the only legal way
       to switch them off (LayoutStrategy only has always/auto; every pipeline
@@ -1064,14 +1054,11 @@ def fast_mode_config(base: dict[str, Any]) -> dict[str, Any]:
     * ``pdf_options.extract_images`` / ``images.extract_images`` /
       ``images.run_ocr_on_images`` stop image extraction and image OCR.
 
-    KNOWN v1.0.14 DEFECT (accepted for fast mode, see AGENTS.md §12): with
-    layout + images all off, PDFs whose pages depend on the document-level OCR
-    fallback (sparse native text / scanned pages) can come back empty --
-    ``run_ocr_on_images`` doubles as the "skip whole-document OCR fallback" gate
-    (pdf/mod.rs:927-931) and turning it off routes such pages into an OCR pass
-    that finds nothing. Native-text pages are unaffected (verified: the 210-page
-    fixture extracts its per-page characters), and the trade-off keeps the
-    "图片提取/OCR OFF" requirement at the cost of that edge case.
+    Fast mode intentionally disables layout and image OCR. PDFs that depend on
+    document-level OCR fallback can therefore be empty because
+    ``run_ocr_on_images`` also gates that fallback. Native-text pages are
+    unaffected, and the trade-off keeps the "图片提取/OCR OFF" requirement at
+    the cost of that edge case.
 
     Native text, native tables (``pdf_options.extract_tables``), heading
     hierarchy and ``ocr_strategy: auto`` keep their base values.
