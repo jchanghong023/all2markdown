@@ -22,6 +22,7 @@
 在项目根目录双击 `init.cmd`，或运行：
 
 ```bat
+$env:UV_SYSTEM_CERTS = "true"
 init.cmd
 ```
 
