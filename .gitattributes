@@ -1,0 +1,10 @@
+# 文本文件统一 LF
+*.py text eol=lf
+*.ps1 text eol=lf
+*.cmd text eol=crlf
+*.md text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.txt text eol=lf
+*.pdf binary

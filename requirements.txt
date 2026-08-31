@@ -1,0 +1,5 @@
+av==18.1.0
+numpy==2.5.2
+pymupdf==1.28.2
+sherpa-onnx==1.13.6
+sherpa-onnx-core==1.13.6

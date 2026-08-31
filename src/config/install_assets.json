@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "assets": [
+    {
+      "id": "xberg-runtime",
+      "group": "xberg",
+      "kind": "zip_member",
+      "url": "https://github.com/xberg-io/xberg/releases/download/v1.0.14/xberg-cli-x86_64-pc-windows-msvc.zip",
+      "mirror_path": "xberg/v1.0.14/xberg-cli-x86_64-pc-windows-msvc.zip",
+      "root": "runtime",
+      "relative_path": "xberg.exe",
+      "sha256": "71e015cbac5d353c0cf0ed261fddc7ca156bd37d19c90fde7ab022d6d397b7ca",
+      "size_bytes": 106787840,
+      "member_basename": "xberg.exe"
+    },
+    {
+      "id": "onnxruntime",
+      "group": "xberg",
+      "kind": "zip_member",
+      "url": "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.2",
+      "mirror_path": "onnxruntime/1.24.2/Microsoft.ML.OnnxRuntime.1.24.2.nupkg",
+      "root": "runtime",
+      "relative_path": "onnxruntime.dll",
+      "sha256": "114947d633e6844ce3c4b51ef6678f776628571d08a5763859c61642c8dcca9c",
+      "size_bytes": 14148680,
+      "member": "runtimes/win-x64/native/onnxruntime.dll"
+    },
+    {
+      "id": "paddle-textline-cls",
+      "group": "xberg",
+      "kind": "file",
+      "url": "https://huggingface.co/xberg-io/paddleocr-onnx-models/resolve/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v2/classifiers/PP-LCNet_x1_0_textline_ori.onnx",
+      "mirror_path": "huggingface/xberg-io/paddleocr-onnx-models/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v2/classifiers/PP-LCNet_x1_0_textline_ori.onnx",
+      "root": "model",
+      "relative_path": "xberg/v1.0.14/hf/models--xberg-io--paddleocr-onnx-models/snapshots/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v2/classifiers/PP-LCNet_x1_0_textline_ori.onnx",
+      "sha256": "1090f9f483a115f904beefe04acc9d28edf0c0b7b08cf0dd8d0ea59a9e0f2735",
+      "size_bytes": 6775212
+    },
+    {
+      "id": "paddle-det-tiny",
+      "group": "xberg",
+      "kind": "file",
+      "url": "https://huggingface.co/xberg-io/paddleocr-onnx-models/resolve/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/det/tiny/model.onnx",
+      "mirror_path": "huggingface/xberg-io/paddleocr-onnx-models/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/det/tiny/model.onnx",
+      "root": "model",
+      "relative_path": "xberg/v1.0.14/hf/models--xberg-io--paddleocr-onnx-models/snapshots/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/det/tiny/model.onnx",
+      "sha256": "7603ac05a98aef4f7284517b9210c09f37352debd1183511645e9ee03c5a0406",
+      "size_bytes": 1793140
+    },
+    {
+      "id": "paddle-rec-tiny",
+      "group": "xberg",
+      "kind": "file",
+      "url": "https://huggingface.co/xberg-io/paddleocr-onnx-models/resolve/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/rec/tiny/model.onnx",
+      "mirror_path": "huggingface/xberg-io/paddleocr-onnx-models/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/rec/tiny/model.onnx",
+      "root": "model",
+      "relative_path": "xberg/v1.0.14/hf/models--xberg-io--paddleocr-onnx-models/snapshots/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/rec/tiny/model.onnx",
+      "sha256": "98e63c179d7905b747272705ebca428b3cf6b759af713800ffdf7b3b6b428656",
+      "size_bytes": 4484068
+    },
+    {
+      "id": "paddle-rec-tiny-dict",
+      "group": "xberg",
+      "kind": "file",
+      "url": "https://huggingface.co/xberg-io/paddleocr-onnx-models/resolve/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/rec/tiny/dict.txt",
+      "mirror_path": "huggingface/xberg-io/paddleocr-onnx-models/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/rec/tiny/dict.txt",
+      "root": "model",
+      "relative_path": "xberg/v1.0.14/hf/models--xberg-io--paddleocr-onnx-models/snapshots/bfaf0b492cfc1dee0c73245fc5860bfdcf2c3443/v6/rec/tiny/dict.txt",
+      "sha256": "c5cbe34ef40c29c4df07ed012bf96569cb69a2d2a01a07027e9f13cb832bd9cd",
+      "size_bytes": 27156
+    },
+    {
+      "id": "layout-rtdetr",
+      "group": "xberg",
+      "kind": "file",
+      "url": "https://huggingface.co/xberg-io/layout-models/resolve/c6bf493e2f7b0b9a29a5870da9880c14e20ff0a3/rtdetr/model.onnx",
+      "mirror_path": "huggingface/xberg-io/layout-models/c6bf493e2f7b0b9a29a5870da9880c14e20ff0a3/rtdetr/model.onnx",
+      "root": "model",
+      "relative_path": "xberg/v1.0.14/hf/models--xberg-io--layout-models/snapshots/c6bf493e2f7b0b9a29a5870da9880c14e20ff0a3/rtdetr/model.onnx",
+      "sha256": "3bf2fb0ee6df87435b7ae47f0f3930ec3dc97ec56fd824acc6d57bc7a6b89ef2",
+      "size_bytes": 169089059
+    },
+    {
+      "id": "layout-tatr",
+      "group": "xberg",
+      "kind": "file",
+      "url": "https://huggingface.co/xberg-io/layout-models/resolve/c6bf493e2f7b0b9a29a5870da9880c14e20ff0a3/tatr/model.onnx",
+      "mirror_path": "huggingface/xberg-io/layout-models/c6bf493e2f7b0b9a29a5870da9880c14e20ff0a3/tatr/model.onnx",
+      "root": "model",
+      "relative_path": "xberg/v1.0.14/hf/models--xberg-io--layout-models/snapshots/c6bf493e2f7b0b9a29a5870da9880c14e20ff0a3/tatr/model.onnx",
+      "sha256": "c11f4033da75e9c4d41c403ef356e89caa0a37a7d111b55461e7d5ba856bb6b6",
+      "size_bytes": 30158413
+    },
+    {
+      "id": "sensevoice-int8",
+      "group": "media",
+      "kind": "file",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+      "mirror_path": "huggingface/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/2365baeacb507f821a0c8120fcee3d484dba7a07/model.int8.onnx",
+      "root": "model",
+      "relative_path": "sherpa_onnx/v1.13.6/models/sense_voice_zh_en_ja_ko_yue_2024_07_17/model.int8.onnx",
+      "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51",
+      "size_bytes": 239233841
+    },
+    {
+      "id": "sensevoice-tokens",
+      "group": "media",
+      "kind": "file",
+      "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+      "mirror_path": "huggingface/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/2365baeacb507f821a0c8120fcee3d484dba7a07/tokens.txt",
+      "root": "model",
+      "relative_path": "sherpa_onnx/v1.13.6/models/sense_voice_zh_en_ja_ko_yue_2024_07_17/tokens.txt",
+      "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc",
+      "size_bytes": 315894
+    },
+    {
+      "id": "silero-vad",
+      "group": "media",
+      "kind": "file",
+      "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/silero_vad.onnx",
+      "mirror_path": "github/k2-fsa/sherpa-onnx/asr-models/silero_vad.onnx",
+      "root": "model",
+      "relative_path": "sherpa_onnx/v1.13.6/models/vad/silero_vad.onnx",
+      "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "size_bytes": 643854
+    }
+  ]
+}

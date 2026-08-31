@@ -1,0 +1,62 @@
+name: Full test suite
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Windows 11 x64 full tests
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      PYTHONUTF8: "1"
+      ALL2MARKDOWN_REQUIRE_REAL_CONVERSION: "1"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          lfs: false
+          submodules: false
+
+      - name: Install bootstrap Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Initialize managed runtime and assets
+        shell: cmd
+        run: cmd /d /c init.cmd
+
+      - name: Compile Python sources
+        shell: cmd
+        run: .venv\Scripts\python.exe -m compileall -q all2markdown.py src tests
+
+      - name: Run all tests, including required real conversions
+        shell: cmd
+        run: .venv\Scripts\python.exe -m unittest discover -s tests -p "test_*.py" -v
+
+  release:
+    name: Publish GitHub release
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Create release with generated notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --generate-notes
