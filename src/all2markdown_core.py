@@ -227,6 +227,9 @@ OOXML_INTERNAL_ROOTS = {
 }
 OOXML_SKIP_EXTENSIONS = {"xml", "rels", "vml", "bin", "dll", "ttf", "odttf", "css"}
 OOXML_SKIP_SUBDIRS = {"media", "diagrams", "theme", "_rels"}
+_ARCHIVE_DUMP_HEADER = re.compile(r"^ZIP Archive \(\d+ files?, \d+ bytes\)$")
+_VISIO_PAGE_PART = re.compile(r"(?:^|/)visio/pages/page\d+\.xml$", re.IGNORECASE)
+
 
 EXIT_OK = 0
 EXIT_PARTIAL = 1
@@ -390,7 +393,9 @@ def build_env(
     env["XBERG_API_ALLOW_LOCAL_URI_INPUTS"] = "1"
     env["XBERG_ORT_EP"] = "cpu"
     env["ORT_DYLIB_PATH"] = str(runtime_paths.runtime_dir() / "onnxruntime.dll")
-    env["XBERG_MAX_CONCURRENT_REQUESTS"] = "0"
+    # Keep the server admission bound to the serialized client pool; ``0`` would
+    # disable Xberg's memory-protecting global request limit.
+    env["XBERG_MAX_CONCURRENT_REQUESTS"] = str(CONCURRENT_REQUESTS)
     if max_request_body_bytes > XBERG_DEFAULT_MAX_REQUEST_BODY_BYTES:
         try:
             max_request_body_bytes = max(
@@ -534,6 +539,49 @@ def _is_ooxml_internal_part(path: str) -> bool:
     return ext in OOXML_SKIP_EXTENSIONS
 
 
+def _is_visio_page_part(path: str) -> bool:
+    """Recognize Xberg's rendered semantic page part inside an embedded VSDX."""
+    return bool(_VISIO_PAGE_PART.search(path.replace("\\", "/")))
+
+
+def _extract_visio_page_text(content: str) -> str:
+    """Keep Visio shape text while dropping generic XML extraction scaffolding."""
+    values: list[str] = []
+    in_text = False
+    for raw_line in content.splitlines():
+        line = raw_line.strip()
+        if line == "#### Text":
+            in_text = True
+            continue
+        if not in_text:
+            continue
+        if re.match(r"^#{1,4}\s", line):
+            in_text = False
+            continue
+        if not line or re.match(r"^#{5,6}\s", line):
+            continue
+        values.append(line)
+    if not values:
+        return ""
+    return "```text\n" + "\n".join(values) + "\n```"
+
+
+
+def _is_raw_archive_dump(text: str) -> bool:
+    """Recognize Xberg's archive fallback, not a document's own prose."""
+    lines = text.lstrip().splitlines()
+    if not lines or not _ARCHIVE_DUMP_HEADER.fullmatch(lines[0].strip()):
+        return False
+    return any(line.lstrip().startswith("Files:") for line in lines[1:4])
+
+
+def _archive_dump_notice(display: str) -> str:
+    return (
+        "Embedded archive content was not parsed by Xberg; "
+        f"raw archive listing omitted for {display}."
+    )
+
+
 def _collect_children(
     children: Any,
     out: list[tuple[str, str]],
@@ -556,9 +604,13 @@ def _collect_children(
             result,
             image_input=Path(rel_path).suffix.lower() in IMAGE_EXTENSIONS,
         )
-        if _is_ooxml_internal_part(display):
+        if _is_visio_page_part(display):
+            content = _extract_visio_page_text(content)
+        elif _is_ooxml_internal_part(display):
             _collect_children(result.get("children"), out, seen, display, depth + 1)
             continue
+        if _is_raw_archive_dump(content):
+            content = _archive_dump_notice(display)
         digest = _content_digest(content)
         if digest and digest not in seen:
             seen.add(digest)

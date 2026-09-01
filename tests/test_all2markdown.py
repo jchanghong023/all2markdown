@@ -267,7 +267,7 @@ class NormalizeMarkdownTest(unittest.TestCase):
 
 
 class EmbeddedPackageFilteringTest(unittest.TestCase):
-    def test_nested_visio_xml_is_not_emitted_as_semantic_sections(self) -> None:
+    def test_nested_visio_page_text_is_emitted_without_xml_scaffolding(self) -> None:
         doc = {
             "content": "# Training",
             "children": [
@@ -280,8 +280,10 @@ class EmbeddedPackageFilteringTest(unittest.TestCase):
                                 "path": "visio/pages/page1.xml",
                                 "result": {
                                     "content": (
-                                        "## VisioDocument\n\n## DocumentSheet\n\n"
-                                        "### Cell\n\n### Cell\n\n## DataTransferInfo"
+                                        "## PageContents\n\n#### Text\n\nIN_PAD1\n\n"
+                                        "### Shape\n\n#### Cell\n\n#### Text\n\n"
+                                        "ip_pin1\n\n### Shape\n\n#### Text\n\n"
+                                        "##### cp\n\ntpi_i\n\n## Connects"
                                     )
                                 },
                             }
@@ -298,11 +300,54 @@ class EmbeddedPackageFilteringTest(unittest.TestCase):
             text,
         )
         self.assertIn("# Diagram title", text)
-        self.assertNotIn("page1.xml", text)
+        self.assertIn(
+            "## Embedded document: ppt/embeddings/Drawing.vsdx/visio/pages/page1.xml",
+            text,
+        )
+        self.assertIn("IN_PAD1\nip_pin1\ntpi_i", text)
+        self.assertNotIn("PageContents", text)
+        self.assertNotIn("### Shape", text)
+        self.assertNotIn("#### Cell", text)
+        self.assertNotIn("## Connects", text)
+
+    def test_raw_embedded_archive_dump_is_not_emitted(self) -> None:
+        doc = {
+            "content": "# Training",
+            "children": [
+                {
+                    "path": "word/embeddings/Drawing.vsdx",
+                    "result": {
+                        "content": (
+                            "ZIP Archive (2 files, 100 bytes)\n\n"
+                            "Files: - visio/document.xml (90 bytes)"
+                        ),
+                        "children": [
+                            {
+                                "path": "visio/pages/page1.xml",
+                                "result": {"content": "## VisioDocument"},
+                            },
+                            {
+                                "path": "notes.txt",
+                                "result": {"content": "Diagram note"},
+                            },
+                        ],
+                    },
+                }
+            ],
+        }
+
+        text = all2markdown.build_final_markdown(doc)
+
+        self.assertIn(
+            "## Embedded document: word/embeddings/Drawing.vsdx",
+            text,
+        )
+        self.assertIn("raw archive listing omitted", text)
+        self.assertIn("Diagram note", text)
+        self.assertNotIn("ZIP Archive (2 files", text)
+        self.assertNotIn("visio/document.xml", text)
         self.assertNotIn("VisioDocument", text)
-        self.assertNotIn("DocumentSheet", text)
-        self.assertNotIn("### Cell", text)
-        self.assertNotIn("DataTransferInfo", text)
+
 
     def test_embedded_image_ocr_uses_the_same_assembler(self) -> None:
         doc = {
@@ -618,7 +663,7 @@ class InstalledRuntimeContractTest(unittest.TestCase):
             self.assertEqual(env[name], "1")
         self.assertEqual(env["XBERG_ORT_EP"], "cpu")
         self.assertEqual(env["XBERG_API_ALLOW_LOCAL_URI_INPUTS"], "1")
-        self.assertEqual(env["XBERG_MAX_CONCURRENT_REQUESTS"], "0")
+        self.assertEqual(env["XBERG_MAX_CONCURRENT_REQUESTS"], "1")
         self.assertEqual(env["XBERG_MAX_REQUEST_BODY_BYTES"], "123456789")
         self.assertEqual(env["XBERG_CORS_ORIGINS"], "http://127.0.0.1:43123")
 
@@ -816,6 +861,7 @@ class PipelineConfigSplitTest(unittest.TestCase):
     def test_real_config_contains_policy(self) -> None:
         raw = json.loads(all2markdown.CONFIG_PATH.read_text(encoding="utf-8"))
         self.assertTrue(raw["large_document"]["enabled"])
+        self.assertEqual(raw["security_limits"]["max_content_size"], 256 * 1024 * 1024)
         xberg, policy = all2markdown.split_pipeline_config(raw)
         self.assertNotIn("large_document", xberg)
         self.assertEqual(policy["page_threshold"], 200)

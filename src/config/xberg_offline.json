@@ -2,7 +2,8 @@
   "use_cache": true,
   "security_limits": {
     "max_nesting_depth": 1000000,
-    "max_xml_depth": 1000000
+    "max_xml_depth": 1000000,
+    "max_content_size": 268435456
   },
   "enable_quality_processing": true,
   "disable_ocr": false,

@@ -871,7 +871,7 @@ def initialize() -> None:
     product_python = prepare_product_venv(uv, env)
     run_command(build_uv_sync_command(uv, product_python), env=env)
     mirror_url = os.environ.get("ALL2MARKDOWN_ASSET_MIRROR_URL", "").strip() or None
-    install_assets(runtime_paths.install_assets(), mirror_url=mirror_url)
+    install_assets(runtime_paths.load_install_manifest()["assets"], mirror_url=mirror_url)
     smoke_check(product_python)
     print("初始化完成。请使用 all2markdown.cmd。")
 
