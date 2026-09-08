@@ -207,6 +207,47 @@ IMAGE_EXTENSIONS = {
     ".pnm", ".pbm", ".pgm", ".ppm",
 }
 
+# 按文件类型多选的分组（扩展名小写、带点），GUI 多选框与 --exts 的共同来源。
+# 选择只做减法：不在选中类型内的文件连扫描都不进入；全选等价于不限。
+# Office 组覆盖 Xberg /formats 实际返回的 Word/PowerPoint/Excel（含传统
+# .doc/.xls/.ppt）及 OpenDocument 行；视频组固定本地 ASR 链路的两种容器。
+FORMAT_GROUPS: dict[str, list[str]] = {
+    "PDF 文档": [".pdf"],
+    "Office 文档": [
+        ".doc", ".docx", ".docm", ".dot", ".dotx", ".dotm",
+        ".ppt", ".pptx", ".pptm", ".pps", ".ppsx",
+        ".pot", ".potx", ".potm",
+        ".xls", ".xlsx", ".xlsm", ".xlsb",
+        ".xlt", ".xltx", ".xltm", ".xla", ".xlam",
+        ".odt", ".ods", ".odp",
+    ],
+    "视频音频": list(convert_mp4.DEFAULT_EXTENSIONS),
+    "图片": sorted(IMAGE_EXTENSIONS),
+    "其他文档": [
+        ".txt", ".md", ".csv", ".tsv", ".rtf",
+        ".html", ".htm", ".eml", ".msg", ".epub", ".zip",
+    ],
+}
+
+
+def parse_exts(raw: str | None) -> set[str] | None:
+    """Parse a comma-separated extension list into a normalized set.
+
+    None/空串表示不限。只做归一化（小写、补点），不校验有效性：扫描时
+    只会与实际支持集合取交集，笔误最多是什么都匹配不到。
+    """
+    if not raw or not raw.strip():
+        return None
+    selected: set[str] = set()
+    for item in raw.split(","):
+        item = item.strip().lower()
+        if not item:
+            continue
+        if not item.startswith("."):
+            item = "." + item
+        selected.add(item)
+    return selected or None
+
 # Large-document routing (single on-disk config, no second file). The policy
 # block below is split off in split_pipeline_config(); Xberg's ExtractionConfig
 # denies unknown fields so it must never reach the server config or /extract.
@@ -1164,8 +1205,56 @@ def _write_sanitized_config(xberg_config: dict[str, Any]) -> Path:
 # Conversion driver
 # ---------------------------------------------------------------------------
 
+def flat_output_name(path: Path) -> str:
+    """Return the flat output file name for an input path (no directories)."""
+    key = Path(path.name)
+    if path.suffix.lower() in set(convert_mp4.DEFAULT_EXTENSIONS):
+        return convert_mp4.media_markdown_relative_path(key).name
+    return convert_mp4.markdown_relative_path(key).name
+
+
+def dedup_flat_inputs(
+    paths: list[Path], input_dir: Path, flat: bool
+) -> tuple[list[Path], int]:
+    """Drop same-flat-name repeats within one batch, keep sorted-first.
+
+    Only active in flat mode: the second copy of a filename converts to the
+    very same Markdown, so converting it again is pure waste. Returns the
+    kept paths plus the dedup-skipped count.
+    """
+    if not flat:
+        return paths, 0
+    seen: set[str] = set()
+    kept: list[Path] = []
+    skipped = 0
+    log = _log()
+    for path in paths:
+        name = flat_output_name(path)
+        if name in seen:
+            log.info(
+                "[跳过] %s (平铺同名 %s 已在本批次转换)",
+                path.relative_to(input_dir),
+                name,
+            )
+            skipped += 1
+            continue
+        seen.add(name)
+        kept.append(path)
+    return kept, skipped
+
+def output_key(rel: Path, flat: bool) -> Path:
+    """Return the path key used for output mapping.
+
+    Flat mode drops all parent directories so outputs from different input
+    subtrees share one namespace: an existing ``name_ext.md`` then means
+    "already converted" without any state file, which also deduplicates the
+    same filename stored in different source directories.
+    """
+    return Path(rel.name) if flat else rel
+
+
 def scan_inputs(
-    input_dir: Path, output_dir: Path, supported: set[str]
+    input_dir: Path, output_dir: Path, supported: set[str], flat: bool = False
 ) -> tuple[list[Path], int]:
     """Collect files to convert; return (files, skipped_count)."""
     files: list[Path] = []
@@ -1186,10 +1275,11 @@ def scan_inputs(
             continue
         if path.suffix.lower() not in supported:
             continue
+        key = output_key(rel, flat)
         out_rel = (
-            convert_mp4.media_markdown_relative_path(rel)
+            convert_mp4.media_markdown_relative_path(key)
             if path.suffix.lower() in set(convert_mp4.DEFAULT_EXTENSIONS)
-            else convert_mp4.markdown_relative_path(rel)
+            else convert_mp4.markdown_relative_path(key)
         )
         out_md = output_dir / out_rel
         if out_md.exists():
@@ -1254,12 +1344,14 @@ def convert_one_result(
     input_path: Path,
     input_dir: Path,
     output_dir: Path,
+    flat: bool = False,
 ) -> bool:
     rel = input_path.relative_to(input_dir)
+    key = output_key(rel, flat)
     output_rel = (
-        convert_mp4.media_markdown_relative_path(rel)
+        convert_mp4.media_markdown_relative_path(key)
         if input_path.suffix.lower() in set(convert_mp4.DEFAULT_EXTENSIONS)
-        else convert_mp4.markdown_relative_path(rel)
+        else convert_mp4.markdown_relative_path(key)
     )
     output_path = output_dir / output_rel
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1302,6 +1394,16 @@ def build_parser() -> argparse.ArgumentParser:
             "单文件超时秒数，同时作用于客户端 HTTP 与服务端 extraction_timeout_secs"
             f"（默认 {REQUEST_TIMEOUT}；传入不同值会使提取缓存键重建一次）"
         ),
+    )
+    parser.add_argument(
+        "--flat",
+        action="store_true",
+        help="平铺输出：忽略输入子目录层级，同名文件只转换一次（已存在即跳过）",
+    )
+    parser.add_argument(
+        "--exts",
+        default=None,
+        help="仅处理这些扩展名（逗号分隔，如 .pdf,.docx；默认处理全部支持类型）",
     )
     return parser
 
@@ -1380,6 +1482,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"--timeout 必须为正数: {args.timeout}", file=sys.stderr)
             return EXIT_USAGE
         timeout = args.timeout
+        flat = bool(args.flat)
+        if flat:
+            log.info("平铺输出已启用：忽略输入子目录层级，同名文件只转换一次")
+        selected_exts = parse_exts(args.exts)
+        if selected_exts is not None:
+            log.info("仅处理文件类型：%s", ", ".join(sorted(selected_exts)))
         # Keep the server-side per-extraction timeout aligned with the client
         # HTTP timeout so the server returns a clean Timeout error first instead
         # of the client dropping the socket while the server keeps burning CPU.
@@ -1405,11 +1513,18 @@ def main(argv: list[str] | None = None) -> int:
         # the Xberg server. In ``xberg`` mode the same files are deliberately
         # left for the Xberg phase below.
         media_extensions = set(convert_mp4.DEFAULT_EXTENSIONS)
+        media_supported = (
+            media_extensions
+            if selected_exts is None
+            else (media_extensions & selected_exts)
+        )
         media_files, media_skipped = (
-            scan_inputs(input_dir, output_dir, media_extensions)
+            scan_inputs(input_dir, output_dir, media_supported, flat)
             if media_backend == "local"
             else ([], 0)
         )
+        media_files, media_dedup = dedup_flat_inputs(media_files, input_dir, flat)
+        media_skipped += media_dedup
         has_doc_candidate = any(
             p.is_file()
             and (media_backend == "xberg" or p.suffix.lower() not in media_extensions)
@@ -1493,9 +1608,13 @@ def main(argv: list[str] | None = None) -> int:
                 supported.update({".pdf", ".docx", ".pptx", ".xlsx"})
                 if media_backend == "xberg":
                     supported.update(media_extensions)
-                doc_files, doc_skipped = scan_inputs(input_dir, output_dir, supported)
+                if selected_exts is not None:
+                    supported &= selected_exts
+                doc_files, doc_skipped = scan_inputs(input_dir, output_dir, supported, flat)
 
             doc_files.sort(key=lambda p: p.stat().st_size, reverse=True)
+            doc_files, doc_dedup = dedup_flat_inputs(doc_files, input_dir, flat)
+            doc_skipped += doc_dedup
             # Large-document routing: quick page count decides the per-file
             # config (normal vs fast) before any extraction starts. Page-count
             # failures degrade to normal; routing never skips or fails a file.
@@ -1578,7 +1697,8 @@ def main(argv: list[str] | None = None) -> int:
                             str(rel.as_posix()), duration, lines, has_audio
                         )
                         convert_mp4.write_atomic(
-                            output_dir / convert_mp4.media_markdown_relative_path(rel),
+                            output_dir
+                            / convert_mp4.media_markdown_relative_path(output_key(rel, flat)),
                             markdown,
                         )
                     except Exception as exc:  # noqa: BLE001
@@ -1670,7 +1790,7 @@ def main(argv: list[str] | None = None) -> int:
                             return
                         warnings = result.get("processing_warnings") or []
                         try:
-                            convert_one_result(result, path, input_dir, output_dir)
+                            convert_one_result(result, path, input_dir, output_dir, flat)
                         except Exception as exc:  # noqa: BLE001
                             log.error("[失败 %s] %s 写盘失败: %s", tag, rel, exc)
                             with progress["lock"]:

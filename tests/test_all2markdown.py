@@ -40,6 +40,26 @@ REQUIRE_REAL_CONVERSION = (
 )
 
 
+def _venv_ready() -> bool:
+    """Integration tests must run under the managed .venv Python 3.12.
+
+    all2markdown.main() refuses any other interpreter by product contract,
+    so running these tests under e.g. system Python would fail for purely
+    environmental reasons; skip instead of failing.
+    """
+    venv_python = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    try:
+        return (
+            sys.version_info[:2] == (3, 12)
+            and pathlib.Path(sys.executable).resolve() == venv_python.resolve()
+        )
+    except OSError:
+        return False
+
+
+VENV_READY = _venv_ready()
+
+
 class RequiredRealConversionAssetsTest(unittest.TestCase):
     @unittest.skipUnless(
         REQUIRE_REAL_CONVERSION,
@@ -59,6 +79,7 @@ class RequiredRealConversionAssetsTest(unittest.TestCase):
 
 
 @unittest.skipUnless(XBERG_ASSETS_OK, "run init.cmd before Xberg integration tests")
+@unittest.skipUnless(VENV_READY, "Xberg integration tests require the .venv Python 3.12")
 class ConvertDocsIntegrationTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -886,6 +907,7 @@ class PipelineConfigSplitTest(unittest.TestCase):
 
 
 @unittest.skipUnless(XBERG_ASSETS_OK, "run init.cmd before Xberg integration tests")
+@unittest.skipUnless(VENV_READY, "Xberg integration tests require the .venv Python 3.12")
 class LargeDocFastModeIntegrationTest(unittest.TestCase):
     """End-to-end: a >200-page PDF must enter fast mode against the real Xberg server.
 
@@ -950,9 +972,9 @@ class LargeDocFastModeIntegrationTest(unittest.TestCase):
         md = self.output_dir / "large_210_pages_pdf.md"
         self.assertTrue(md.is_file(), "missing single markdown for the large pdf")
         text = md.read_text(encoding="utf-8")
-        # 2 lines x 120 "1" per page x 210 pages = 50400; native text must be kept
-        # even with the all-visual-steps-off fast config (dense text avoids the
-        # sparse-page OCR-fallback defect, see AGENTS.md §12).
+        # 3 lines x 100 "1" per page x 210 pages = 63000 (+ row/page tag ones);
+        # native text must be kept even with the all-visual-steps-off fast
+        # config (dense mid-page text avoids the sparse-page OCR-fallback defect).
         self.assertGreaterEqual(text.count("1"), 50000, "native text of every page should be preserved")
         self.assertNotIn("![", text, "no image references expected")
 
@@ -971,7 +993,155 @@ class LargeDocFastModeIntegrationTest(unittest.TestCase):
             all2markdown.extract_single = original
         self.assertEqual(rc2, all2markdown.EXIT_OK)
         self.assertEqual(md.stat().st_mtime_ns, mtime_before, "existing markdown must not be rewritten")
+
         self.assertEqual(captured2, {}, "skipped run must not call /extract")
+
+
+class FlatOutputKeyTest(unittest.TestCase):
+    """Pure unit contracts for flat output mapping (no assets needed)."""
+
+    def test_hierarchical_default_keeps_parents(self) -> None:
+        rel = pathlib.Path("sub/dir/a.docx")
+        self.assertEqual(
+            all2markdown.output_key(rel, False), pathlib.Path("sub/dir/a.docx")
+        )
+        self.assertEqual(all2markdown.flat_output_name(rel), "a_docx.md")
+
+    def test_flat_drops_parents(self) -> None:
+        self.assertEqual(
+            all2markdown.output_key(pathlib.Path("sub/a.PPTX"), True),
+            pathlib.Path("a.PPTX"),
+        )
+        self.assertEqual(
+            all2markdown.flat_output_name(pathlib.Path("sub/a.PPTX")), "a_pptx.md"
+        )
+        self.assertEqual(
+            all2markdown.flat_output_name(pathlib.Path("sub/clip.MP4")), "clip_mp4.md"
+        )
+
+    def test_dedup_keeps_sorted_first(self) -> None:
+        base = pathlib.Path("/repo/input")
+        paths = [base / "sub/dup.pdf", base / "dup.pdf", base / "other.pdf"]
+        kept, skipped = all2markdown.dedup_flat_inputs(sorted(paths), base, True)
+        self.assertEqual(skipped, 1)
+        self.assertEqual(kept, [base / "dup.pdf", base / "other.pdf"])
+
+    def test_dedup_inactive_without_flat(self) -> None:
+        base = pathlib.Path("/repo/input")
+        paths = [base / "sub/dup.pdf", base / "dup.pdf"]
+        kept, skipped = all2markdown.dedup_flat_inputs(paths, base, False)
+        self.assertEqual((kept, skipped), (paths, 0))
+
+    def test_parser_flat_defaults_off(self) -> None:
+        self.assertFalse(all2markdown.build_parser().parse_args([]).flat)
+        self.assertTrue(
+            all2markdown.build_parser().parse_args(["in", "out", "--flat"]).flat
+        )
+
+
+@unittest.skipUnless(XBERG_ASSETS_OK, "run init.cmd before Xberg integration tests")
+@unittest.skipUnless(VENV_READY, "Xberg integration tests require the .venv Python 3.12")
+class FlatOutputIntegrationTest(unittest.TestCase):
+    """End-to-end: --flat drops hierarchy and converts same names once."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        cls.tmp = pathlib.Path(
+            tempfile.mkdtemp(prefix="flat_test_", dir=str(TEST_TEMP_ROOT))
+        )
+        cls.input_dir = cls.tmp / "input"
+        cls.output_dir = cls.tmp / "output"
+        cls.input_dir.mkdir()
+        examples = REPO_ROOT / "tests" / "test_example"
+        shutil.copy(examples / "single_paper.pdf", cls.input_dir / "dup.pdf")
+        (cls.input_dir / "sub").mkdir()
+        shutil.copy(examples / "single_paper.pdf", cls.input_dir / "sub" / "dup.pdf")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_flat_dedup_and_skip(self) -> None:
+        with self.assertLogs(level="INFO") as captured:
+            rc = all2markdown.main(
+                [str(self.input_dir), str(self.output_dir), "--flat"]
+            )
+        self.assertEqual(rc, all2markdown.EXIT_OK)
+        self.assertTrue(
+            any("平铺同名" in message for message in captured.output),
+            "in-batch flat dedup must log the dropped repeat",
+        )
+        flat_md = self.output_dir / "dup_pdf.md"
+        self.assertTrue(flat_md.is_file(), "missing flat markdown")
+        self.assertFalse(
+            (self.output_dir / "sub").exists(), "flat output must not keep hierarchy"
+        )
+        self.assertGreater(flat_md.stat().st_size, 100)
+
+        # Second run: existing flat markdown -> skip without extraction.
+        mtime_before = flat_md.stat().st_mtime_ns
+        rc2 = all2markdown.main([str(self.input_dir), str(self.output_dir), "--flat"])
+        self.assertEqual(rc2, all2markdown.EXIT_OK)
+        self.assertEqual(
+            mtime_before, flat_md.stat().st_mtime_ns, "existing markdown untouched"
+        )
+
+
+class ExtFilterTest(unittest.TestCase):
+    """Pure unit contracts for --exts parsing (no assets needed)."""
+
+    def test_none_and_empty_mean_unrestricted(self) -> None:
+        self.assertIsNone(all2markdown.parse_exts(None))
+        self.assertIsNone(all2markdown.parse_exts(""))
+        self.assertIsNone(all2markdown.parse_exts("  , "))
+
+    def test_normalizes_case_dot_and_spaces(self) -> None:
+        self.assertEqual(
+            all2markdown.parse_exts("PDF, docx ,.PNG"), {".pdf", ".docx", ".png"}
+        )
+
+    def test_format_groups_cover_gui_checkboxes(self) -> None:
+        groups = all2markdown.FORMAT_GROUPS
+        self.assertIn(".pdf", groups["PDF 文档"])
+        self.assertIn(".docx", groups["Office 文档"])
+        self.assertIn(".mp4", groups["视频音频"])
+        self.assertIn(".png", groups["图片"])
+
+
+@unittest.skipUnless(XBERG_ASSETS_OK, "run init.cmd before Xberg integration tests")
+@unittest.skipUnless(VENV_READY, "Xberg integration tests require the .venv Python 3.12")
+class ExtFilterIntegrationTest(unittest.TestCase):
+    """End-to-end: --exts restricts the recursive scan to selected types."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        cls.tmp = pathlib.Path(
+            tempfile.mkdtemp(prefix="exts_test_", dir=str(TEST_TEMP_ROOT))
+        )
+        cls.input_dir = cls.tmp / "input"
+        cls.output_dir = cls.tmp / "output"
+        cls.input_dir.mkdir()
+        examples = REPO_ROOT / "tests" / "test_example"
+        shutil.copy(examples / "single_paper.pdf", cls.input_dir / "doc.pdf")
+        (cls.input_dir / "sub").mkdir()
+        shutil.copy(
+            examples / "test_hello_world.png", cls.input_dir / "sub" / "pic.png"
+        )
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_only_selected_types_converted(self) -> None:
+        rc = all2markdown.main(
+            [str(self.input_dir), str(self.output_dir), "--flat", "--exts", ".pdf"]
+        )
+        self.assertEqual(rc, all2markdown.EXIT_OK)
+        self.assertTrue((self.output_dir / "doc_pdf.md").is_file())
+        self.assertFalse((self.output_dir / "pic_png.md").exists())
+        self.assertFalse((self.output_dir / "sub").exists())
 
 
 if __name__ == "__main__":

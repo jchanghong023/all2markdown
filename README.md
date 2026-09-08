@@ -86,6 +86,17 @@ all2markdown.cmd input output --xberg-config my_xberg_config.json
 
 `all2markdown.cmd` 只使用项目 `.venv\Scripts\python.exe`。如果尚未初始化，会提示先运行 `init.cmd`，不会回退到 PATH 或系统 Python。
 
+## 图形界面
+
+双击 `gui.cmd` 打开图形界面（同样只使用项目 `.venv`，未初始化会提示先运行 `init.cmd`）：
+
+1. 点击「浏览…」选择任意输入目录（任意盘符/文件夹均可）。
+2. 在「本次处理的文件类型」中勾选 PDF 文档、Office 文档、视频音频、图片、其他文档（默认全选即不限类型；也可全选/全不选一键切换）。
+3. 点击「开始转换」。输出固定为项目 `output` 目录，并自动平铺：忽略输入子目录层级，同名文件只转换一次，`output` 中已有的 Markdown 不重复处理。
+
+界面下方的进度条和日志区实时镜像控制台输出（含 Xberg/OCR/转录进度与跳过信息）。
+命令行等价写法：`all2markdown.cmd D:\docs output --flat --exts .pdf,.docx`。
+
 ## 常用配置
 
 默认配置文件为 `src/config/xberg_offline.json`。修改前建议先复制一份，保持 JSON 语法有效（布尔值使用 `true`/`false`，末项后不能有逗号）。表中的点号表示逐层嵌套，例如 `concurrency.max_threads` 对应 `"concurrency": {"max_threads": 12}`。

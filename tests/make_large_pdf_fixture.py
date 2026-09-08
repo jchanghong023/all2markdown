@@ -1,8 +1,14 @@
 """Deterministically build the 210-page PDF fixture for large-document routing.
 
-Every page carries two lines of 120 ASCII "1" characters each (240 characters
-per page) in the PDF built-in Helvetica font (never embedded); page content
-streams are compressed (``pageCompression=1``). The dense text keeps the
+Every page carries three lines of 100 ASCII "1" characters each (300 per page)
+in the PDF built-in Helvetica font (never embedded), placed mid-page
+(baselines y=650/600/550 on A4, 50pt apart) with a unique ``row{k}-page{nnn}``
+prefix per line; page content streams are compressed (``pageCompression=1``).
+Mid-page placement plus unique prefixes matter: Xberg >= v2026.9.1 drops
+near-page-edge native text in its structure-rendering step and collapses
+repeated identical lines, so bottom-edge or fully identical text would come
+back partial or empty for reasons unrelated to the fast-mode routing under
+test. The dense text keeps the
 native-text layer "substantive" so Xberg's per-page OCR quality gate does not
 route pages into the document-level OCR fallback under the fast (all-visual
 steps off) config. Generated with ReportLab, pinned ``reportlab==5.0.1``
@@ -34,10 +40,10 @@ def main() -> int:
     OUT.parent.mkdir(parents=True, exist_ok=True)
     c = canvas.Canvas(str(OUT), pagesize=A4, pageCompression=1, invariant=1)
     c.setTitle("large_210_pages")
-    for _ in range(PAGE_COUNT):
+    for i in range(PAGE_COUNT):
         c.setFont("Helvetica", 8)
-        c.drawString(10, 10, "1" * 120)
-        c.drawString(10, 25, "1" * 120)
+        for k, y in enumerate((650, 600, 550)):
+            c.drawString(10, y, f"row{k}-page{i:03d} " + "1" * 100)
         c.showPage()
     c.save()
     print(f"wrote {OUT} ({OUT.stat().st_size} bytes, {PAGE_COUNT} pages)")
