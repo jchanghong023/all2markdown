@@ -1144,5 +1144,35 @@ class ExtFilterIntegrationTest(unittest.TestCase):
         self.assertFalse((self.output_dir / "sub").exists())
 
 
+class ManagedInterpreterGateTest(unittest.TestCase):
+    """check_platform must accept the managed pythonw launcher (gui.cmd).
+
+    Regression: gui.cmd runs .venv pythonw.exe, whose sys.executable differs
+    from python.exe and was wrongly rejected with EXIT_PREFLIGHT (rc 3).
+    """
+
+    def test_pythonw_next_to_managed_python_is_accepted(self) -> None:
+        venv_exe = str(all2markdown.REPO_ROOT / ".venv" / "Scripts" / "pythonw.exe")
+        with (
+            mock.patch.object(sys, "executable", venv_exe),
+            mock.patch.object(sys, "version_info", (3, 12, 0, "final", 0)),
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch("platform.machine", return_value="AMD64"),
+        ):
+            all2markdown.check_platform()  # must not raise
+
+    def test_foreign_interpreter_is_rejected(self) -> None:
+        with (
+            mock.patch.object(sys, "executable", r"C:\Python313\python.exe"),
+            mock.patch.object(sys, "version_info", (3, 13, 0, "final", 0)),
+            mock.patch.object(sys, "platform", "win32"),
+            mock.patch("platform.machine", return_value="AMD64"),
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaises(SystemExit) as raised,
+        ):
+            all2markdown.check_platform()
+        self.assertEqual(raised.exception.code, all2markdown.EXIT_PREFLIGHT)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

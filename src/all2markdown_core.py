@@ -295,13 +295,15 @@ def check_platform() -> None:
     if platform.machine().lower() not in ("amd64", "x86_64") or sys.maxsize <= 2**32:
         print(f"仅支持 x86_64；当前架构: {platform.machine()}", file=sys.stderr)
         raise SystemExit(EXIT_PREFLIGHT)
-    managed_python = REPO_ROOT / ".venv" / "Scripts" / "python.exe"
+    managed_scripts = (REPO_ROOT / ".venv" / "Scripts").resolve()
+    exe = Path(sys.executable).resolve()
     if (
         sys.version_info[:2] != (3, 12)
-        or Path(sys.executable).resolve() != managed_python.resolve()
+        or exe.parent != managed_scripts
+        or exe.stem.lower() not in ("python", "pythonw")
     ):
         print(
-            "请通过 all2markdown.cmd 使用初始化生成的 Windows x64 Python 3.12 环境；"
+            "请通过 all2markdown.cmd / gui.cmd 使用初始化生成的 Windows x64 Python 3.12 环境；"
             "如尚未初始化，请先运行 init.cmd。"
             f"\n当前解释器: {sys.executable}",
             file=sys.stderr,

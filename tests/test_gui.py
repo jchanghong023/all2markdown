@@ -1,11 +1,10 @@
 """GUI 逻辑测试：进度解析、日志队列、返回码文案（无显示可跑）。
-
 App 本体冒烟仅在有显示时执行；--flat 端到端在 test_all2markdown 中。
 """
 
 from __future__ import annotations
 
-import logging
+import io
 import pathlib
 import queue
 import sys
@@ -63,25 +62,42 @@ class ParseProgressTest(unittest.TestCase):
         self.assertIsNone(gui.parse_progress(""))
 
 
-class QueueHandlerTest(unittest.TestCase):
-    def test_formats_and_queues(self) -> None:
+class TeeStderrTest(unittest.TestCase):
+    def test_fans_out_to_queue_console_and_file(self) -> None:
         target: queue.Queue[str] = queue.Queue()
-        handler = gui.QueueHandler(target)
-        record = logging.LogRecord(
-            name="test", level=logging.INFO, pathname=__file__, lineno=1,
-            msg="你好 %s", args=("世界",), exc_info=None,
-        )
-        handler.emit(record)
-        line = target.get_nowait()
-        self.assertIn("你好 世界", line)
-        self.assertRegex(line, r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2} INFO")
+        console = io.StringIO()
+        fh = io.StringIO()
+        tee = gui.TeeStderr(target.put, console, fh)
+        self.assertEqual(tee.write("预检失败\n\n下一行"), len("预检失败\n\n下一行"))
+        tee.flush()
+        # 空行不入队，非空行进面板队列。
+        self.assertEqual(target.get_nowait(), "预检失败")
+        self.assertEqual(target.get_nowait(), "下一行")
+        self.assertTrue(target.empty())
+        # 控制台与文件保留原文（含空行）。
+        self.assertEqual(console.getvalue(), "预检失败\n\n下一行")
+        self.assertEqual(fh.getvalue(), "预检失败\n\n下一行")
+
+    def test_none_targets_are_safe(self) -> None:
+        target: queue.Queue[str] = queue.Queue()
+        tee = gui.TeeStderr(target.put, None, None)
+        tee.write("hello")
+        tee.flush()
+        self.assertEqual(target.get_nowait(), "hello")
 
 
 class DescribeReturncodeTest(unittest.TestCase):
     def test_codes(self) -> None:
         self.assertIn("全部成功", gui.describe_returncode(all2markdown.EXIT_OK))
         self.assertIn("部分", gui.describe_returncode(all2markdown.EXIT_PARTIAL))
+        self.assertIn("预检失败", gui.describe_returncode(all2markdown.EXIT_PREFLIGHT))
+        self.assertIn("用法错误", gui.describe_returncode(all2markdown.EXIT_USAGE))
         self.assertIn("42", gui.describe_returncode(42))
+
+    def test_run_log_naming(self) -> None:
+        path = gui.gui_run_log_path()
+        self.assertEqual(path.parent.name, ".tmp")
+        self.assertRegex(path.name, r"^gui-\d{8}-\d{6}\.log$")
 
 
 

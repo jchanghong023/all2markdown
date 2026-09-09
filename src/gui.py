@@ -11,11 +11,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import os
 import queue
 import re
 import sys
 import threading
+import time
 import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, ttk
@@ -52,28 +55,76 @@ def parse_progress(line: str) -> tuple[str, int, int] | None:
     return None
 
 
-class QueueHandler(logging.Handler):
-    """把日志记录原样送入线程安全队列，供 Tk 主线程轮询展示。"""
+class TeeStderr:
+    """stderr 分流：界面队列 + 控制台原样 + run 日志文件。
 
-    def __init__(self, target: queue.Queue[str]) -> None:
-        super().__init__()
-        self._target = target
-        self.setFormatter(logging.Formatter(LOG_FORMAT, LOG_DATE_FORMAT))
+    核心的预检/用法错误走 ``print(..., file=sys.stderr)``，不经过 logging；
+    没有这一层，它们既进不了界面日志区，在 pythonw 下还直接不可见。
+    空行不入队，避免日志区出现无意义空行。
+    """
 
-    def emit(self, record: logging.LogRecord) -> None:
+    def __init__(
+        self,
+        put: "callable[[str], None]",
+        console: "object | None",
+        fh: "object | None",
+    ) -> None:
+        self._put = put
+        self._console = console
+        self._fh = fh
+
+    def write(self, s: str) -> int:
+        for target in (self._console, self._fh):
+            if target is not None:
+                try:
+                    target.write(s)
+                except Exception:  # noqa: BLE001 - 控制台/文件坏了不影响界面
+                    pass
         try:
-            self._target.put_nowait(self.format(record))
-        except queue.Full:  # pragma: no cover - 无界队列恒不触发
+            for line in s.splitlines():
+                if line.strip():
+                    self._put(line)
+        except Exception:  # noqa: BLE001 - 队列满了就丢，转换本身不受影响
             pass
+        return len(s)
+
+    def flush(self) -> None:
+        for target in (self._console, self._fh):
+            if target is not None:
+                try:
+                    target.flush()
+                except Exception:  # noqa: BLE001
+                    pass
+
+
+def gui_log_dir() -> Path:
+    """界面 run 日志与 Xberg 服务日志所在的 repo 临时目录（gitignored）。"""
+    d = all2markdown.REPO_ROOT / ".tmp"
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def gui_run_log_path() -> Path:
+    """本次转换的完整日志文件路径（纯函数，可单测文件名规则）。"""
+    return gui_log_dir() / time.strftime("gui-%Y%m%d-%H%M%S.log")
+
+
+_RC_HINTS = {
+    all2markdown.EXIT_USAGE: "用法错误（输入目录/配置/参数）",
+    all2markdown.EXIT_PREFLIGHT: "预检失败（运行环境或离线资产）",
+    all2markdown.EXIT_SERVER: "Xberg 服务启动失败",
+    all2markdown.EXIT_UNEXPECTED: "未预期错误",
+}
 
 
 def describe_returncode(rc: int) -> str:
-    """把转换返回码翻译为面向用户的状态文案。"""
+    """把转换返回码翻译为面向用户的状态文案（含已知码中文解释）。"""
     if rc == all2markdown.EXIT_OK:
         return "转换完成：全部成功"
     if rc == all2markdown.EXIT_PARTIAL:
         return "转换结束：部分文件失败，详见日志"
-    return f"转换失败（返回码 {rc}），详见日志"
+    hint = _RC_HINTS.get(rc, f"返回码 {rc}")
+    return f"转换失败（{hint}），详见日志"
 
 
 def build_conversion_argv(
@@ -215,45 +266,80 @@ class App(tk.Tk):
             messagebox.showwarning("未选择类型", "请至少勾选一种要处理的文件类型。")
             return
         argv = build_conversion_argv(input_dir, "output", selected)
-        self._append_log(f"输入目录：{input_dir}")
+        log_path = gui_run_log_path()
+        try:
+            fh = open(log_path, "a", encoding="utf-8")
+        except OSError as exc:
+            messagebox.showwarning("日志文件打不开", f"无法写入 {log_path}：{exc}")
+            return
+        header = [f"输入目录：{input_dir}"]
         if selected is None:
-            self._append_log("文件类型：全部（输出 output，平铺去重）")
+            header.append("文件类型：全部（输出 output，平铺去重）")
         else:
-            self._append_log(
+            header.append(
                 "文件类型：{}（输出 output，平铺去重）".format(", ".join(sorted(selected)))
             )
+        for line in header:
+            self._append_log(line)
+            try:
+                fh.write(line + "\n")
+            except Exception:  # noqa: BLE001
+                pass
+        try:
+            fh.flush()
+        except Exception:  # noqa: BLE001
+            pass
         self._total = 0
         self._bar.configure(mode="determinate", value=0)
         self._set_status("转换中…")
-        handler = QueueHandler(self._log_queue)
-        logging.getLogger().addHandler(handler)
-        # main() 内的 basicConfig 在 root 已有 handler 时是 no-op，
-        # 必须显式放开 root 级别，否则 INFO 进度日志到不了队列。
-        logging.getLogger().setLevel(logging.INFO)
+        self._set_running(True)
         self._worker = threading.Thread(
             target=self._run,
-            args=(argv, handler),
+            args=(argv, fh, log_path),
             daemon=True,
         )
         self._worker.start()
         self.after(100, self._drain)
 
-    def _run(self, argv: list[str], handler: QueueHandler) -> None:
+    def _run(self, argv: list[str], fh: object, log_path: Path) -> None:
+        root = logging.getLogger()
+        handlers_before = list(root.handlers)
+        # pythonw 下 sys.stderr 为 None；__stderr__ 同理，Tee 内部各自判空。
+        tee = TeeStderr(self._log_queue.put, sys.__stderr__, fh)
         try:
-            rc = all2markdown.main(argv)
+            with contextlib.redirect_stderr(tee):
+                rc = all2markdown.main(argv)
+        except SystemExit as exc:
+            # 预检失败等直接 raise SystemExit：必须转成返回码进面板，
+            # 否则哨兵丢失、界面永远卡在“转换中…”。
+            code = exc.code
+            rc = code if isinstance(code, int) else all2markdown.EXIT_UNEXPECTED
+            self._log_queue.put(f"预检/启动失败（返回码 {rc}），原因见上方日志")
         except Exception as exc:  # noqa: BLE001 - 异常也要落盘到界面
             logging.getLogger().exception("转换异常：%s", exc)
             rc = all2markdown.EXIT_UNEXPECTED
         finally:
-            logging.getLogger().removeHandler(handler)
+            # main() 内的 basicConfig 会往 root 加 handler；清掉本次新增的，
+            # 下次转换行为与本次完全一致（配置/级别都不残留）。
+            for handler in list(root.handlers):
+                if handler not in handlers_before:
+                    try:
+                        root.removeHandler(handler)
+                        handler.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+            try:
+                fh.close()  # type: ignore[union-attr]
+            except Exception:  # noqa: BLE001
+                pass
         self._log_queue.put("\u0000RC={}".format(rc))
 
     # -- 日志回灌与进度 ------------------------------------------------
     def _drain(self) -> None:
         try:
             self._drain_once()
-        except Exception as exc:  # noqa: BLE001 - 泵永不断链，异常打控制台
-            print(f"GUI 日志泵异常：{exc!r}", file=sys.stderr)
+        except Exception as exc:  # noqa: BLE001 - 泵永不断链，异常直接进面板
+            self._append_log(f"GUI 日志泵异常：{exc!r}（转换本身不受影响）")
         if self._worker is not None:
             self.after(100, self._drain)
 
@@ -281,8 +367,9 @@ class App(tk.Tk):
     def _finish(self, rc: int) -> None:
         if rc == all2markdown.EXIT_OK:
             self._bar["value"] = 100
-        self._set_status(describe_returncode(rc))
-        self._append_log(describe_returncode(rc))
+        result = describe_returncode(rc)
+        self._set_status(result)
+        self._append_log(result)
         self._set_running(False)
         self._worker = None
 
