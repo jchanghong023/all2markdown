@@ -123,8 +123,18 @@ def describe_returncode(rc: int) -> str:
         return "转换完成：全部成功"
     if rc == all2markdown.EXIT_PARTIAL:
         return "转换结束：部分文件失败，详见日志"
+    if rc == all2markdown.EXIT_CANCELLED:
+        return "已手动停止：保留已完成的结果"
     hint = _RC_HINTS.get(rc, f"返回码 {rc}")
     return f"转换失败（{hint}），详见日志"
+
+
+def resolve_initial_dir(argv: list[str] | None) -> str:
+    """取启动参数中的初始输入目录（纯函数，无显示可测）。"""
+    for arg in argv or []:
+        if not arg.startswith("-") and arg.strip():
+            return arg
+    return ""
 
 
 def build_conversion_argv(
@@ -157,8 +167,9 @@ class App(tk.Tk):
     """主窗口：目录选择 + 开始按钮 + 进度条 + 日志区。"""
 
 
-    def __init__(self) -> None:
+    def __init__(self, input_dir: str = "") -> None:
         super().__init__()
+        self._initial_dir = input_dir
         self.title("all2markdown 图形界面")
         self.minsize(760, 540)
         self._log_queue: queue.Queue[str] = queue.Queue()
@@ -174,7 +185,7 @@ class App(tk.Tk):
         root.columnconfigure(1, weight=1)
 
         ttk.Label(root, text="输入目录：").grid(row=0, column=0, sticky=tk.W)
-        self._input_var = tk.StringVar()
+        self._input_var = tk.StringVar(value=self._initial_dir)
         self._input_entry = ttk.Entry(root, textvariable=self._input_var)
         self._input_entry.grid(row=0, column=1, sticky=tk.EW, padx=(0, 8))
         self._browse_btn = ttk.Button(root, text="浏览…", command=self._browse)
@@ -218,6 +229,10 @@ class App(tk.Tk):
             btn_row, text="开始转换", command=self._start, style="Accent.TButton"
         )
         self._start_btn.pack(side=tk.LEFT)
+        self._stop_btn = ttk.Button(
+            btn_row, text="停止", command=self._stop, state=tk.DISABLED
+        )
+        self._stop_btn.pack(side=tk.LEFT, padx=(8, 0))
         self._status_var = tk.StringVar(value="就绪")
         ttk.Label(btn_row, textvariable=self._status_var).pack(
             side=tk.LEFT, padx=(12, 0)
@@ -254,6 +269,15 @@ class App(tk.Tk):
         for box in self._type_boxes:
             box.configure(state=state)
         self._start_btn.configure(text="转换中…" if running else "开始转换")
+        self._stop_btn.configure(state=(tk.NORMAL if running else tk.DISABLED),
+                                 text="停止")
+
+    def _stop(self) -> None:
+        if self._worker is None or not self._worker.is_alive():
+            return
+        all2markdown.request_cancel()
+        self._set_status("正在停止（当前文件完成后停）…")
+        self._stop_btn.configure(state=tk.DISABLED, text="停止中…")
 
     def _start(self) -> None:
         input_dir = self._input_var.get().strip().strip('"')
@@ -382,10 +406,11 @@ class App(tk.Tk):
         self._log.see(tk.END)
         self._log.configure(state=tk.DISABLED)
 
-
-def main() -> int:
-    """启动图形界面。"""
-    App().mainloop()
+def main(argv: list[str] | None = None) -> int:
+    """启动图形界面；可带一个初始输入目录参数。"""
+    if argv is None:
+        argv = sys.argv[1:]
+    App(resolve_initial_dir(argv)).mainloop()
     return 0
 
 

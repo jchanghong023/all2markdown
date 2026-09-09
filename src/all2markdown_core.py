@@ -278,6 +278,20 @@ EXIT_USAGE = 2
 EXIT_PREFLIGHT = 3
 EXIT_SERVER = 4
 EXIT_UNEXPECTED = 11
+EXIT_CANCELLED = 130
+
+
+_cancel_requested = threading.Event()
+
+
+def request_cancel() -> None:
+    """请求停止：当前文件完成后停，不再取新文件（GUI 停止按钮用）。"""
+    _cancel_requested.set()
+
+
+def cancel_requested() -> bool:
+    """是否已请求停止（循环顶部调用，文件粒度）。"""
+    return _cancel_requested.is_set()
 
 
 def _log() -> logging.Logger:
@@ -1421,7 +1435,7 @@ def main(argv: list[str] | None = None) -> int:
         handlers=[logging.StreamHandler()],
     )
     log = _log()
-
+    _cancel_requested.clear()
     try:
         preflight_t0 = time.monotonic()
         check_platform()
@@ -1680,6 +1694,9 @@ def main(argv: list[str] | None = None) -> int:
                             time.monotonic() - model_t0,
                         )
                 for path in media_files:
+                    if cancel_requested():
+                        log.warning("[停止] 用户停止：不再取新文件（媒体）")
+                        break
                     rel = path.relative_to(input_dir)
                     tag = next_tag()
                     log.info(
@@ -1722,13 +1739,19 @@ def main(argv: list[str] | None = None) -> int:
                         len(lines),
                     )
                     report_progress()
-
             # Phase 2: 文档 -> Xberg（客户端并发池，单文件单请求）。
-            if doc_files:
+            # 用户停止后不再启动服务、不再取新文件。
+            if doc_files and not cancel_requested():
 
                 def worker(index: int, path: Path) -> None:
                     rel = path.relative_to(input_dir)
                     tag = f"{index}/{total}"
+                    if cancel_requested():
+                        log.warning("[停止 %s] %s 未开始（用户停止）", tag, rel)
+                        with progress["lock"]:
+                            progress["done"] += 1
+                        report_progress()
+                        return
                     media_tag = (
                         " [媒体转录/Xberg]"
                         if media_backend == "xberg" and path.suffix.lower() in media_extensions
@@ -1845,6 +1868,13 @@ def main(argv: list[str] | None = None) -> int:
                     for future in futures:
                         future.result()
 
+            if cancel_requested():
+                log.warning(
+                    "用户停止：已完成 %d，失败 %d（剩余文件未处理，已写盘结果保留）",
+                    progress["ok"],
+                    progress["fail"],
+                )
+                return EXIT_CANCELLED
             log.info(
                 "完成: %d ok, %d skip, %d fail, %d warnings，总耗时 %.1fs",
                 progress["ok"],

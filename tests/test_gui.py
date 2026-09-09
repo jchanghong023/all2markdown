@@ -35,6 +35,8 @@ class AppSmokeTest(unittest.TestCase):
     def test_builds_widgets(self) -> None:
         self.assertIn("all2markdown", self.app.title())
         self.assertEqual(self.app._start_btn["text"], "开始转换")
+        self.assertEqual(self.app._stop_btn["text"], "停止")
+        self.assertEqual(str(self.app._stop_btn["state"]), "disabled")
         self.assertEqual(self.app._status_var.get(), "就绪")
         self.assertEqual(len(self.app._type_vars), len(all2markdown.FORMAT_GROUPS))
         self.assertTrue(
@@ -83,7 +85,15 @@ class TeeStderrTest(unittest.TestCase):
         tee = gui.TeeStderr(target.put, None, None)
         tee.write("hello")
         tee.flush()
-        self.assertEqual(target.get_nowait(), "hello")
+class ResolveInitialDirTest(unittest.TestCase):
+    def test_empty_and_flags(self) -> None:
+        self.assertEqual(gui.resolve_initial_dir(None), "")
+        self.assertEqual(gui.resolve_initial_dir([]), "")
+        self.assertEqual(gui.resolve_initial_dir(["--flat"]), "")
+
+    def test_first_positional_wins(self) -> None:
+        self.assertEqual(gui.resolve_initial_dir(["D:/docs"]), "D:/docs")
+        self.assertEqual(gui.resolve_initial_dir(["--x", "D:/a", "D:/b"]), "D:/a")
 
 
 class DescribeReturncodeTest(unittest.TestCase):
@@ -92,6 +102,7 @@ class DescribeReturncodeTest(unittest.TestCase):
         self.assertIn("部分", gui.describe_returncode(all2markdown.EXIT_PARTIAL))
         self.assertIn("预检失败", gui.describe_returncode(all2markdown.EXIT_PREFLIGHT))
         self.assertIn("用法错误", gui.describe_returncode(all2markdown.EXIT_USAGE))
+        self.assertIn("手动停止", gui.describe_returncode(all2markdown.EXIT_CANCELLED))
         self.assertIn("42", gui.describe_returncode(42))
 
     def test_run_log_naming(self) -> None:

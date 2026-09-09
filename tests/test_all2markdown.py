@@ -1174,5 +1174,67 @@ class ManagedInterpreterGateTest(unittest.TestCase):
         self.assertEqual(raised.exception.code, all2markdown.EXIT_PREFLIGHT)
 
 
+class CancelEventTest(unittest.TestCase):
+    """Pure unit contracts for the cooperative cancel flag."""
+
+    def test_request_and_clear_roundtrip(self) -> None:
+        all2markdown._cancel_requested.clear()
+        self.assertFalse(all2markdown.cancel_requested())
+        all2markdown.request_cancel()
+        self.assertTrue(all2markdown.cancel_requested())
+        all2markdown._cancel_requested.clear()
+        self.assertFalse(all2markdown.cancel_requested())
+
+
+@unittest.skipUnless(XBERG_ASSETS_OK, "run init.cmd before Xberg integration tests")
+@unittest.skipUnless(VENV_READY, "Xberg integration tests require the .venv Python 3.12")
+class CancelIntegrationTest(unittest.TestCase):
+    """End-to-end: cancel mid-batch stops new files, keeps done work, rc 130."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        TEST_TEMP_ROOT.mkdir(parents=True, exist_ok=True)
+        cls.tmp = pathlib.Path(
+            tempfile.mkdtemp(prefix="cancel_test_", dir=str(TEST_TEMP_ROOT))
+        )
+        cls.input_dir = cls.tmp / "input"
+        cls.output_dir = cls.tmp / "output"
+        cls.input_dir.mkdir()
+        examples = REPO_ROOT / "tests" / "test_example"
+        shutil.copy(examples / "test_hello_world.png", cls.input_dir / "a.png")
+        shutil.copy(examples / "test_hello_world.png", cls.input_dir / "b.png")
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        shutil.rmtree(cls.tmp, ignore_errors=True)
+
+    def test_cancel_mid_batch(self) -> None:
+        original = all2markdown.extract_single
+        calls: list[str] = []
+
+        def spy(port: int, path: pathlib.Path, config: dict, timeout: int):  # noqa: ANN
+            calls.append(path.name)
+            if len(calls) == 1:
+                all2markdown.request_cancel()
+            return original(port, path, config, timeout)
+
+        all2markdown.extract_single = spy
+        try:
+            rc = all2markdown.main(
+                [str(self.input_dir), str(self.output_dir), "--flat"]
+            )
+        finally:
+            all2markdown.extract_single = original
+        # Sequential single-worker pool: first file done, second never started.
+        self.assertEqual(rc, all2markdown.EXIT_CANCELLED)
+        self.assertEqual(all2markdown.EXIT_CANCELLED, 130)
+        self.assertTrue((self.output_dir / "a_png.md").is_file())
+        self.assertFalse((self.output_dir / "b_png.md").exists())
+        # 下一次 main 入口自动清掉取消标记，不污染后续运行。
+        all2markdown.main([str(self.input_dir), str(self.output_dir), "--flat"])
+        self.assertFalse(all2markdown.cancel_requested())
+        self.assertTrue((self.output_dir / "b_png.md").is_file())
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
