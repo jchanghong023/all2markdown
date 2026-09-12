@@ -408,6 +408,24 @@ class SpatialOcrLayoutTest(unittest.TestCase):
         ]
         self.assertEqual(all2markdown.spatial_ocr_markdown(elements), "Hello World")
 
+    def test_dict_point_quadrilateral_is_supported(self) -> None:
+        # Latest Xberg REST returns quadrilateral points as {x,y} objects.
+        element = {
+            "text": "Hello World",
+            "level": "line",
+            "geometry": {
+                "type": "quadrilateral",
+                "points": [
+                    {"x": 34, "y": 58},
+                    {"x": 272, "y": 58},
+                    {"x": 272, "y": 113},
+                    {"x": 34, "y": 113},
+                ],
+            },
+        }
+        self.assertEqual(all2markdown._ocr_aabb(element), (34.0, 58.0, 238.0, 55.0))
+        self.assertEqual(all2markdown.spatial_ocr_markdown([element]), "Hello World")
+
     def test_backend_accepted_low_confidence_text_is_preserved(self) -> None:
         element = self._box("faint but valid", 10, 10, 140, 25)
         element["confidence"] = {"recognition": 0.2}

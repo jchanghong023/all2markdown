@@ -700,6 +700,8 @@ def strip_image_placeholders(text: str) -> str:
     parse nor OCR (empty/undecodable data, EMF, ...). Project rule forbids
     image references in output, so placeholder-only lines are removed;
     inline references inside real text and anything inside code fences stay.
+    Newer Xberg keeps image path + OCR text in one fenced block — those
+    path lines are preserved as part of the block.
     """
     out_lines: list[str] = []
     fence: str | None = None
@@ -896,7 +898,12 @@ def _ocr_aabb(element: dict[str, Any]) -> tuple[float, float, float, float] | No
             geometry = list(zip(geometry[::2], geometry[1::2]))
         points: list[tuple[float, float]] = []
         for point in geometry:
-            if isinstance(point, (list, tuple)) and len(point) >= 2:
+            if isinstance(point, dict) and "x" in point and "y" in point:
+                try:
+                    points.append((float(point["x"]), float(point["y"])))
+                except (TypeError, ValueError):
+                    pass
+            elif isinstance(point, (list, tuple)) and len(point) >= 2:
                 try:
                     points.append((float(point[0]), float(point[1])))
                 except (TypeError, ValueError):
