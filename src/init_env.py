@@ -164,16 +164,69 @@ def _open_download(url: str, partial: Path):
     return urllib.request.urlopen(_request(url), timeout=DOWNLOAD_TIMEOUT), "wb"
 
 
-def download_to_partial(url: str, partial: Path) -> None:
+def _human_bytes(num: float) -> str:
+    units = ("B", "KB", "MB", "GB")
+    value = float(num)
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == "B":
+                return "{:.0f}{}".format(value, unit)
+            return "{:.1f}{}".format(value, unit)
+        value /= 1024.0
+    return "{:.1f}GB".format(value)
+
+
+def download_to_partial(url: str, partial: Path, label: str = "") -> None:
+    """Download with periodic stdout progress (unbuffered-friendly)."""
     ensure_directory(partial.parent)
+    tag = " {}".format(label) if label else ""
     response, mode = _open_download(url, partial)
     with response:
+        header_total = response.headers.get("Content-Length") or ""
+        try:
+            remaining = int(header_total) if header_total.strip().isdigit() else 0
+        except ValueError:
+            remaining = 0
+        start = partial.stat().st_size if mode == "ab" and partial.is_file() else 0
+        downloaded = start
+        expected = start + remaining if remaining > 0 else 0
+        last_print = 0.0
+        print(
+            "开始下载{}：{}".format(tag, _human_bytes(start) if start else "0B"),
+            flush=True,
+        )
         with partial.open(mode) as handle:
             while True:
                 chunk = response.read(CHUNK_SIZE)
                 if not chunk:
                     break
                 handle.write(chunk)
+                downloaded += len(chunk)
+                now = time.monotonic()
+                if now - last_print >= 1.0:
+                    last_print = now
+                    if expected > 0:
+                        pct = min(100.0, downloaded * 100.0 / expected)
+                        print(
+                            "下载进度{}：{}/{}（{:.0f}%）".format(
+                                tag, _human_bytes(downloaded), _human_bytes(expected), pct
+                            ),
+                            flush=True,
+                        )
+                    else:
+                        print(
+                            "下载进度{}：{}".format(tag, _human_bytes(downloaded)),
+                            flush=True,
+                        )
+        if expected > 0:
+            print(
+                "下载完成{}：{}/{}（100%）".format(
+                    tag, _human_bytes(downloaded), _human_bytes(expected)
+                ),
+                flush=True,
+            )
+        else:
+            print("下载完成{}：{}".format(tag, _human_bytes(downloaded)), flush=True)
 
 def _load_release_metadata(url: str) -> Mapping[str, Any]:
     try:
@@ -387,7 +440,11 @@ def _install_latest_github_release_asset(asset: Mapping[str, Any]) -> bool:
             and archive_partial.stat().st_size >= int(release["archive_size_bytes"])
         ):
             archive_partial.unlink()
-        download_to_partial(str(release["browser_download_url"]), archive_partial)
+        download_to_partial(
+            str(release["browser_download_url"]),
+            archive_partial,
+            label=str(asset["id"]),
+        )
         archive_valid, actual_size, actual_digest = validate_asset_file(
             archive_partial, archive_expected
         )
@@ -589,7 +646,7 @@ def _install_direct_asset(
 ) -> None:
     partial = destination.with_name(destination.name + ".part")
     _prepare_direct_partial(partial, asset)
-    download_to_partial(source_url, partial)
+    download_to_partial(source_url, partial, label=str(asset["id"]))
     valid, actual_size, actual_digest = validate_asset_file(partial, asset)
     if not valid:
         if partial.exists() and actual_size >= int(asset["size_bytes"]):
@@ -604,7 +661,7 @@ def _install_archive_asset(
     archive_partial = destination.with_name(destination.name + ".archive.part")
     output_partial = destination.with_name(destination.name + ".part")
     output_partial.unlink(missing_ok=True)
-    download_to_partial(source_url, archive_partial)
+    download_to_partial(source_url, archive_partial, label=str(asset["id"]))
     try:
         _extract_archive_asset(archive_partial, output_partial, asset)
         valid, actual_size, actual_digest = validate_asset_file(output_partial, asset)
