@@ -4,79 +4,12 @@
     {
       "id": "xberg-runtime",
       "group": "xberg",
-      "kind": "github_release_zip_member",
+      "kind": "github_release_zip_tree",
       "api_url": "https://api.github.com/repos/jchanghong023/xberg/releases/latest",
       "repository": "jchanghong023/xberg",
       "asset_name": "xberg-cli-x86_64-pc-windows-msvc.zip",
       "root": "runtime",
-      "relative_path": "xberg.exe",
-      "member_basename": "xberg.exe"
-    },
-    {
-      "id": "onnxruntime",
-      "group": "xberg",
-      "kind": "zip_member",
-      "url": "https://www.nuget.org/api/v2/package/Microsoft.ML.OnnxRuntime/1.24.2",
-      "mirror_path": "onnxruntime/1.24.2/Microsoft.ML.OnnxRuntime.1.24.2.nupkg",
-      "root": "runtime",
-      "relative_path": "onnxruntime.dll",
-      "sha256": "114947d633e6844ce3c4b51ef6678f776628571d08a5763859c61642c8dcca9c",
-      "size_bytes": 14148680,
-      "member": "runtimes/win-x64/native/onnxruntime.dll"
-    },
-    {
-      "id": "paddle-textline-cls",
-      "group": "xberg",
-      "kind": "xberg_manifest_model",
-      "repository": "xberg-io/paddleocr-onnx-models",
-      "model_path": "v2/classifiers/PP-LCNet_x1_0_textline_ori.onnx",
-      "root": "model",
-      "relative_path": "xberg/latest/hf/.unresolved/paddle-textline-cls"
-    },
-    {
-      "id": "paddle-det-tiny",
-      "group": "xberg",
-      "kind": "xberg_manifest_model",
-      "repository": "xberg-io/paddleocr-onnx-models",
-      "model_path": "v6/det/tiny/model.onnx",
-      "root": "model",
-      "relative_path": "xberg/latest/hf/.unresolved/paddle-det-tiny"
-    },
-    {
-      "id": "paddle-rec-tiny",
-      "group": "xberg",
-      "kind": "xberg_manifest_model",
-      "repository": "xberg-io/paddleocr-onnx-models",
-      "model_path": "v6/rec/tiny/model.onnx",
-      "root": "model",
-      "relative_path": "xberg/latest/hf/.unresolved/paddle-rec-tiny"
-    },
-    {
-      "id": "paddle-rec-tiny-dict",
-      "group": "xberg",
-      "kind": "xberg_manifest_model",
-      "repository": "xberg-io/paddleocr-onnx-models",
-      "model_path": "v6/rec/tiny/dict.txt",
-      "root": "model",
-      "relative_path": "xberg/latest/hf/.unresolved/paddle-rec-tiny-dict"
-    },
-    {
-      "id": "layout-rtdetr",
-      "group": "xberg",
-      "kind": "xberg_manifest_model",
-      "repository": "xberg-io/layout-models",
-      "model_path": "rtdetr/model.onnx",
-      "root": "model",
-      "relative_path": "xberg/latest/hf/.unresolved/layout-rtdetr"
-    },
-    {
-      "id": "layout-tatr",
-      "group": "xberg",
-      "kind": "xberg_manifest_model",
-      "repository": "xberg-io/layout-models",
-      "model_path": "tatr/model.onnx",
-      "root": "model",
-      "relative_path": "xberg/latest/hf/.unresolved/layout-tatr"
+      "relative_path": "xberg.exe"
     },
     {
       "id": "sensevoice-int8",

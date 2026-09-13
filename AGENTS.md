@@ -15,13 +15,13 @@
 
 - 仅支持 Windows 11 x64、纯 CPU、AVX2。初始化可使用预装的 Windows x64 Python 3.8+；产品执行固定使用 uv 管理的 Python 3.12 和项目 `.venv`。
 - `init.cmd` 是唯一安装入口；它可以联网下载托管 Python、锁定包和初始化资产。转换阶段必须强制离线，不得联网补下载或读取无关的用户历史缓存。
-- Xberg 每次初始化都从 `jchanghong023/xberg` 的 GitHub Latest Release 解析并安装最新 Windows x64 CLI；ONNX Runtime 固定 1.24.2。运行时和解析出的发布身份安装到 `%LOCALAPPDATA%\all2markdown\xberg\latest`（或 `ALL2MARKDOWN_DATA_DIR` 对应位置）。
-- Xberg/OCR/Layout 模型安装到 `%USERPROFILE%\.models\all2markdown\xberg\latest`，其修订、大小和 SHA-256 必须从当前 Latest Xberg CLI 的内置 `cache manifest` 解析；媒体模型安装到同一模型根目录的 `sherpa_onnx\v1.13.6`（或 `ALL2MARKDOWN_MODEL_DIR` 对应位置）。
-- `src/config/install_assets.json` 是非 Python 固定资产及动态 Xberg/Xberg 模型选择器的唯一来源；动态发布标签、URL、压缩包、成员及匹配模型校验值原子记录到本地 `release.json`。初始化必须校验 SHA-256，转换预检必须离线校验存在性和大小。
+- Xberg 每次初始化都从 `jchanghong023/xberg` 的 GitHub Latest Release 下载 `xberg-cli-x86_64-pc-windows-msvc.zip`，并**整包解压**到 `%LOCALAPPDATA%\all2markdown\xberg\latest\runtime`（或 `ALL2MARKDOWN_DATA_DIR` 对应位置）。包内已含 `xberg.exe`、ONNX Runtime DLL、MSVC CRT，以及 `models/` 下的 PaddleOCR tiny / layout（RT-DETR、TATR）/ Whisper tiny 模型。`ALL2MARKDOWN_XBERG_ZIP_PATH` 可指向本地 zip 做安装验证；生产安装不得静默改走其它源。
+- 转换时 `HF_HUB_CACHE` 指向包内 `runtime/models`，不再从 `cache manifest` 单独下载 Xberg/OCR/Layout 模型。媒体模型（SenseVoice / Silero VAD）仍安装到 `%USERPROFILE%\.models\all2markdown` 下的 `sherpa_onnx\v1.13.6`（或 `ALL2MARKDOWN_MODEL_DIR` 对应位置）。
+- `src/config/install_assets.json` 是非 Python 固定资产的唯一来源；Xberg 运行时资产类型为 `github_release_zip_tree`。动态发布标签、URL、压缩包摘要、成员清单原子记录到本地 `release.json`。初始化必须校验 SHA-256，转换预检必须离线校验存在性和大小。
 - 媒体链路固定 sherpa-onnx 1.13.6、PyAV 18.1.0、NumPy 2.5.2；不得改变 Mandarin、ITN、Silero VAD 或 CPU provider 行为。
 - `requirements.txt` 只含运行时包，`requirements-dev.txt` 只增加测试夹具依赖；所有包版本必须使用 `==` 锁定。
 - 不得使用 Git LFS，不得提交运行时、模型、wheel、Python 解释器、下载缓存或安装产物。仓库只保留安装清单和 `licenses/third_party/` 下的小型许可/归属文本。
-- 运行时必须设置 Hugging Face 全部离线变量、固定本项目用户模型缓存并使用 CPU execution provider。
+- 运行时必须设置 Hugging Face 全部离线变量、`HF_HUB_CACHE` 指向包内模型目录，并使用 CPU execution provider。
 
 ## 转换行为
 

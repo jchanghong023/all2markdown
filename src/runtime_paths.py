@@ -60,7 +60,8 @@ def xberg_cache_dir() -> Path:
 
 
 def hf_cache_dir() -> Path:
-    return model_root() / "xberg" / XBERG_CHANNEL / "hf"
+    """Hugging Face cache that ships inside the Xberg release bundle."""
+    return runtime_dir() / "models"
 
 
 def xberg_release_state_path() -> Path:
@@ -84,13 +85,11 @@ def load_install_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
     seen = set()
     common_required = {"id", "group", "kind", "root", "relative_path"}
     static_required = {"url", "mirror_path", "sha256", "size_bytes"}
-    release_required = {"api_url", "repository", "asset_name", "member_basename"}
-    model_required = {"repository", "model_path"}
+    release_required = {"api_url", "repository", "asset_name"}
     valid_kinds = {
         "file",
         "zip_member",
-        "github_release_zip_member",
-        "xberg_manifest_model",
+        "github_release_zip_tree",
     }
     for asset in assets:
         if not isinstance(asset, dict) or not common_required.issubset(asset):
@@ -110,10 +109,8 @@ def load_install_manifest(path: Optional[Path] = None) -> Dict[str, Any]:
             asset.get("member") or asset.get("member_basename")
         ):
             raise ValueError("zip member selector missing for {}".format(asset_id))
-        if kind == "github_release_zip_member" and not release_required.issubset(asset):
+        if kind == "github_release_zip_tree" and not release_required.issubset(asset):
             raise ValueError("GitHub release metadata missing for {}".format(asset_id))
-        if kind == "xberg_manifest_model" and not model_required.issubset(asset):
-            raise ValueError("Xberg model selector missing for {}".format(asset_id))
     return manifest
 
 
@@ -149,6 +146,7 @@ def _resolve_installed_release_asset(asset: Mapping[str, Any]) -> Dict[str, Any]
     state = load_xberg_release_state()
     if (
         state
+        and state.get("kind", "github_release_zip_tree") == "github_release_zip_tree"
         and state["repository"] == asset["repository"]
         and state["asset_name"] == asset["asset_name"]
     ):
@@ -158,34 +156,11 @@ def _resolve_installed_release_asset(asset: Mapping[str, Any]) -> Dict[str, Any]
                 "sha256": state["member_sha256"],
                 "size_bytes": state["member_size_bytes"],
                 "release_tag": state["tag_name"],
+                "tree_files": list(state.get("tree_files") or []),
             }
         )
     else:
-        resolved.update({"url": "", "sha256": "", "size_bytes": -1})
-    return resolved
-
-
-def _resolve_installed_xberg_model_asset(asset: Mapping[str, Any]) -> Dict[str, Any]:
-    resolved = dict(asset)
-    state = load_xberg_release_state()
-    models = state.get("models") if state else None
-    model = models.get(asset["id"]) if isinstance(models, dict) else None
-    if (
-        isinstance(model, dict)
-        and model.get("repository") == asset["repository"]
-        and model.get("model_path") == asset["model_path"]
-    ):
-        resolved.update(model)
-        resolved["kind"] = "file"
-    else:
-        resolved.update(
-            {
-                "url": "",
-                "mirror_path": "",
-                "sha256": "",
-                "size_bytes": -1,
-            }
-        )
+        resolved.update({"url": "", "sha256": "", "size_bytes": -1, "tree_files": []})
     return resolved
 
 
@@ -195,10 +170,8 @@ def install_assets(
     assets = load_install_manifest(path)["assets"]
     resolved_assets = []
     for asset in assets:
-        if asset["kind"] == "github_release_zip_member":
+        if asset["kind"] == "github_release_zip_tree":
             resolved_assets.append(_resolve_installed_release_asset(asset))
-        elif asset["kind"] == "xberg_manifest_model":
-            resolved_assets.append(_resolve_installed_xberg_model_asset(asset))
         else:
             resolved_assets.append(asset)
     if group is None:

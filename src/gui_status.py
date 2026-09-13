@@ -167,9 +167,16 @@ def check_xberg_runtime() -> Tuple[bool, str]:
             issues.append("{} 缺失".format(asset["id"]))
         elif expected > 0 and path.stat().st_size != expected:
             issues.append("{} 大小不符".format(asset["id"]))
+        if asset.get("kind") != "github_release_zip_tree":
+            continue
+        runtime_root = path.parent
+        if not (runtime_root / "onnxruntime.dll").is_file():
+            issues.append("onnxruntime.dll 缺失")
+        if not (runtime_root / "models").is_dir():
+            issues.append("models 目录缺失")
     if issues:
         return False, "；".join(issues)
-    return True, "xberg.exe 与模型资产完整"
+    return True, "xberg.exe、ONNX Runtime 与内置模型完整"
 
 
 def check_media_assets() -> Tuple[bool, str]:

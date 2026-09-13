@@ -82,6 +82,10 @@
   "max_archive_depth": 3,
   "extraction_timeout_secs": 21600,
   "max_concurrent_extractions": 8,
+  "transcription": {
+    "enabled": true,
+    "model": "tiny"
+  },
   "media_transcription_backend": "local",
   "large_document": {
     "enabled": true,

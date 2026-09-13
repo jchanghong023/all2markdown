@@ -372,6 +372,82 @@ def _extract_archive_asset(
         _copy_archive_notices(archive, asset, selected)
 
 
+def _extract_archive_tree(archive_path: Path, dest_dir: Path) -> List[Dict[str, Any]]:
+    """Extract every archive member into ``dest_dir``.
+
+    A single shared root directory prefix (as produced by the Windows CLI
+    packaging script) is stripped so ``xberg.exe`` lands directly under
+    ``dest_dir``. Returns the installed file inventory.
+    """
+    if dest_dir.exists():
+        shutil.rmtree(str(dest_dir))
+    ensure_directory(dest_dir)
+
+    members: List[Tuple[zipfile.ZipInfo, str]] = []
+    with zipfile.ZipFile(str(archive_path), "r") as archive:
+        for info in archive.infolist():
+            normalized = _safe_archive_name(info.filename)
+            if info.is_dir():
+                continue
+            unix_mode = (info.external_attr >> 16) & 0o170000
+            if unix_mode == 0o120000:
+                raise InstallError("压缩包包含符号链接：{}".format(info.filename))
+            members.append((info, normalized))
+
+        if not members:
+            raise InstallError("Xberg 发布压缩包为空")
+
+        prefixes = {PurePosixPath(name).parts[0] for _, name in members if name}
+        strip_root: Optional[str] = None
+        if len(prefixes) == 1:
+            candidate = next(iter(prefixes))
+            if all(
+                name == candidate or name.startswith(candidate + "/")
+                for _, name in members
+            ):
+                strip_root = candidate
+
+        inventory: List[Dict[str, Any]] = []
+        for info, name in members:
+            rel = name
+            if strip_root is not None:
+                rel = name[len(strip_root) :].lstrip("/")
+            if not rel or rel.endswith("/"):
+                continue
+            target = dest_dir.joinpath(*PurePosixPath(rel).parts)
+            ensure_directory(target.parent)
+            partial = target.with_name(target.name + ".part")
+            with archive.open(info, "r") as source, partial.open("wb") as output:
+                shutil.copyfileobj(source, output, CHUNK_SIZE)
+            os.replace(str(partial), str(target))
+            inventory.append(
+                {
+                    "path": rel.replace("\\", "/"),
+                    "size_bytes": target.stat().st_size,
+                    "sha256": sha256_file(target),
+                }
+            )
+        _copy_tree_notices(dest_dir)
+    return inventory
+
+
+def _copy_tree_notices(dest_dir: Path) -> None:
+    license_dir = runtime_paths.data_root() / "licenses"
+    try:
+        ensure_directory(license_dir)
+        for name in ("LICENSE", "THIRD_PARTY_LICENSES.md"):
+            source = dest_dir / name
+            if not source.is_file():
+                continue
+            target = license_dir / "xberg-runtime-{}".format(name)
+            partial = target.with_name(target.name + ".part")
+            with source.open("rb") as src, partial.open("wb") as out:
+                shutil.copyfileobj(src, out, CHUNK_SIZE)
+            os.replace(str(partial), str(target))
+    except OSError as exc:
+        print("警告：无法保存 Xberg 上游许可文件：{}".format(exc))
+
+
 def _release_is_installed(
     asset: Mapping[str, Any], release: Mapping[str, Any], destination: Path
 ) -> bool:
@@ -395,7 +471,14 @@ def _release_is_installed(
             "sha256": state["member_sha256"],
         },
     )
-    return valid
+    if not valid:
+        return False
+    runtime_root = destination.parent
+    if not (runtime_root / "onnxruntime.dll").is_file():
+        return False
+    if not (runtime_root / "models").is_dir():
+        return False
+    return True
 
 
 def _write_release_state_partial(state: Mapping[str, Any]) -> Path:
@@ -408,208 +491,151 @@ def _write_release_state_partial(state: Mapping[str, Any]) -> Path:
     return partial
 
 
+def _local_xberg_zip_override() -> Optional[Path]:
+    raw = os.environ.get("ALL2MARKDOWN_XBERG_ZIP_PATH", "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = runtime_paths.REPO_ROOT / path
+    path = path.resolve()
+    if not path.is_file():
+        raise InstallError(
+            "ALL2MARKDOWN_XBERG_ZIP_PATH 指向的本地 Xberg 压缩包不存在：{}".format(path)
+        )
+    return path
+
+
+def _swap_runtime_tree(staging: Path, runtime_root: Path) -> None:
+    backup = runtime_root.with_name(runtime_root.name + ".old")
+    if backup.exists():
+        shutil.rmtree(str(backup))
+    if runtime_root.exists():
+        runtime_root.rename(backup)
+    try:
+        staging.rename(runtime_root)
+    except OSError:
+        if backup.exists() and not runtime_root.exists():
+            backup.rename(runtime_root)
+        raise
+    if backup.exists():
+        shutil.rmtree(str(backup), ignore_errors=True)
+
+
 def _install_latest_github_release_asset(asset: Mapping[str, Any]) -> bool:
-    release = resolve_latest_github_release(asset)
+    local_zip = _local_xberg_zip_override()
+    if local_zip is not None:
+        release = {
+            "schema_version": 1,
+            "kind": "github_release_zip_tree",
+            "repository": str(asset["repository"]),
+            "tag_name": "local-zip",
+            "asset_name": str(asset["asset_name"]),
+            "browser_download_url": local_zip.as_uri(),
+            "archive_sha256": sha256_file(local_zip),
+            "archive_size_bytes": local_zip.stat().st_size,
+        }
+        print("使用本地 Xberg 压缩包：{}".format(local_zip))
+    else:
+        release = resolve_latest_github_release(asset)
+        release = dict(release)
+        release["kind"] = "github_release_zip_tree"
+
     destination = runtime_paths.asset_path(asset)
-    ensure_directory(destination.parent)
+    runtime_root = destination.parent
+    ensure_directory(runtime_root.parent)
     if _release_is_installed(asset, release, destination):
         print(
             "复用已校验 Xberg 最新发布 {}：{}".format(
-                release["tag_name"], destination
+                release["tag_name"], runtime_root
             )
         )
         return True
 
-    archive_expected = {
-        "id": "{}-archive".format(asset["id"]),
-        "size_bytes": release["archive_size_bytes"],
-        "sha256": release["archive_sha256"],
-    }
-    archive_partial = destination.with_name(
-        "{}.{}.archive.part".format(
-            destination.name, str(release["archive_sha256"])[:16]
+    archive_source: Optional[Path] = None
+    archive_owned = False
+    if local_zip is not None:
+        archive_source = local_zip
+    else:
+        archive_expected = {
+            "id": "{}-archive".format(asset["id"]),
+            "size_bytes": release["archive_size_bytes"],
+            "sha256": release["archive_sha256"],
+        }
+        archive_partial = runtime_root.parent / "{}.{}.archive.part".format(
+            asset["id"], str(release["archive_sha256"])[:16]
         )
-    )
-    for obsolete in destination.parent.glob(destination.name + ".*.archive.part"):
-        if obsolete != archive_partial:
-            obsolete.unlink(missing_ok=True)
-    archive_valid, _, _ = validate_asset_file(archive_partial, archive_expected)
-    if not archive_valid:
-        if (
-            archive_partial.is_file()
-            and archive_partial.stat().st_size >= int(release["archive_size_bytes"])
+        for obsolete in runtime_root.parent.glob(
+            "{}.*.archive.part".format(asset["id"])
         ):
-            archive_partial.unlink()
-        download_to_partial(
-            str(release["browser_download_url"]),
-            archive_partial,
-            label=str(asset["id"]),
-        )
-        archive_valid, actual_size, actual_digest = validate_asset_file(
-            archive_partial, archive_expected
-        )
+            if obsolete != archive_partial:
+                obsolete.unlink(missing_ok=True)
+        archive_valid, _, _ = validate_asset_file(archive_partial, archive_expected)
         if not archive_valid:
-            archive_partial.unlink(missing_ok=True)
-            raise _validation_error(
-                archive_expected,
+            if (
+                archive_partial.is_file()
+                and archive_partial.stat().st_size
+                >= int(release["archive_size_bytes"])
+            ):
+                archive_partial.unlink()
+            download_to_partial(
                 str(release["browser_download_url"]),
-                actual_size,
-                actual_digest,
+                archive_partial,
+                label=str(asset["id"]),
             )
+            archive_valid, actual_size, actual_digest = validate_asset_file(
+                archive_partial, archive_expected
+            )
+            if not archive_valid:
+                archive_partial.unlink(missing_ok=True)
+                raise _validation_error(
+                    archive_expected,
+                    str(release["browser_download_url"]),
+                    actual_size,
+                    actual_digest,
+                )
+        archive_source = archive_partial
+        archive_owned = True
 
-    output_partial = destination.with_name(destination.name + ".part")
+    staging = runtime_root.with_name(runtime_root.name + ".staging")
     state_partial: Optional[Path] = None
-    output_partial.unlink(missing_ok=True)
     try:
-        _extract_archive_asset(archive_partial, output_partial, asset)
+        tree_files = _extract_archive_tree(archive_source, staging)
+        exe = staging / "xberg.exe"
+        ort = staging / "onnxruntime.dll"
+        models = staging / "models"
+        if not exe.is_file():
+            raise InstallError("Xberg 发布包缺少 xberg.exe")
+        if not ort.is_file():
+            raise InstallError("Xberg 发布包缺少 onnxruntime.dll")
+        if not models.is_dir():
+            raise InstallError("Xberg 发布包缺少 models 目录")
+
         state = dict(release)
         state.update(
             {
-                "member_sha256": sha256_file(output_partial),
-                "member_size_bytes": output_partial.stat().st_size,
+                "member_sha256": sha256_file(exe),
+                "member_size_bytes": exe.stat().st_size,
+                "tree_files": tree_files,
             }
         )
         state_partial = _write_release_state_partial(state)
-        os.replace(str(output_partial), str(destination))
+        _swap_runtime_tree(staging, runtime_root)
         os.replace(str(state_partial), str(runtime_paths.xberg_release_state_path()))
-        archive_partial.unlink(missing_ok=True)
+        state_partial = None
+        if archive_owned and archive_source is not None:
+            archive_source.unlink(missing_ok=True)
     except (InstallError, OSError, RuntimeError, zipfile.BadZipFile):
-        output_partial.unlink(missing_ok=True)
+        if staging.exists():
+            shutil.rmtree(str(staging), ignore_errors=True)
         if state_partial is not None:
             state_partial.unlink(missing_ok=True)
         raise
     print(
-        "已安装 Xberg 最新发布 {}：{}".format(release["tag_name"], destination)
+        "已安装 Xberg 最新发布 {}：{}".format(release["tag_name"], runtime_root)
     )
     return False
 
-
-def _parse_huggingface_model_url(url: str) -> Tuple[str, str, str]:
-    parsed = urllib.parse.urlsplit(url)
-    parts = [urllib.parse.unquote(part) for part in parsed.path.split("/") if part]
-    if (
-        parsed.scheme != "https"
-        or parsed.netloc.casefold() != "huggingface.co"
-        or len(parts) < 5
-        or parts[2] != "resolve"
-        or any(part in ("", ".", "..") for part in parts)
-    ):
-        raise InstallError("Xberg 模型清单包含不受支持的来源：{}".format(redact_url(url)))
-    repository = "{}/{}".format(parts[0], parts[1])
-    revision = parts[3]
-    model_path = "/".join(parts[4:])
-    return repository, revision, model_path
-
-
-def _xberg_model_relative_path(repository: str, revision: str, model_path: str) -> str:
-    owner, name = repository.split("/", 1)
-    return "xberg/{}/hf/models--{}--{}/snapshots/{}/{}".format(
-        runtime_paths.XBERG_CHANNEL,
-        owner,
-        name,
-        revision,
-        model_path,
-    )
-
-
-def resolve_xberg_manifest_models(
-    assets: Sequence[Mapping[str, Any]],
-) -> List[Dict[str, Any]]:
-    """Resolve selected model metadata from the installed Xberg executable."""
-    executable = runtime_paths.runtime_dir() / "xberg.exe"
-    if not executable.is_file():
-        raise InstallError("无法读取 Xberg 模型清单：可执行文件不存在 {}".format(executable))
-    completed = run_command(
-        [str(executable), "cache", "manifest", "--format", "json"],
-        capture_output=True,
-    )
-    try:
-        manifest = json.loads(completed.stdout)
-    except (TypeError, ValueError) as exc:
-        raise InstallError("Xberg 模型清单不是有效 JSON") from exc
-    models = manifest.get("models") if isinstance(manifest, dict) else None
-    if not isinstance(models, list):
-        raise InstallError("Xberg 模型清单缺少模型列表")
-
-    indexed: Dict[Tuple[str, str], Dict[str, Any]] = {}
-    for candidate in models:
-        if not isinstance(candidate, dict):
-            continue
-        source_url = str(candidate.get("source_url") or "")
-        sha256 = str(candidate.get("sha256") or "").lower()
-        try:
-            repository, revision, model_path = _parse_huggingface_model_url(source_url)
-            size_bytes = int(candidate["size_bytes"])
-        except (InstallError, KeyError, TypeError, ValueError):
-            continue
-        if len(sha256) != 64 or size_bytes <= 0:
-            continue
-        key = (repository, model_path)
-        if key in indexed:
-            raise InstallError(
-                "Xberg 模型清单包含重复模型：{} {}".format(repository, model_path)
-            )
-        indexed[key] = {
-            "url": source_url,
-            "mirror_path": "huggingface/{}/{}/{}".format(
-                repository, revision, model_path
-            ),
-            "relative_path": _xberg_model_relative_path(
-                repository, revision, model_path
-            ),
-            "sha256": sha256,
-            "size_bytes": size_bytes,
-            "repository": repository,
-            "revision": revision,
-            "model_path": model_path,
-        }
-
-    resolved: List[Dict[str, Any]] = []
-    state_models: Dict[str, Dict[str, Any]] = {}
-    for asset in assets:
-        key = (str(asset["repository"]), str(asset["model_path"]))
-        model = indexed.get(key)
-        if model is None:
-            raise InstallError(
-                "Xberg 模型清单缺少所需模型：{} {}".format(key[0], key[1])
-            )
-        selected = dict(asset)
-        selected.update(model)
-        selected["kind"] = "file"
-        resolved.append(selected)
-        state_models[str(asset["id"])] = dict(model)
-
-    state = runtime_paths.load_xberg_release_state()
-    if state is None:
-        raise InstallError("Xberg 发布状态缺失，无法记录匹配的模型清单")
-    state["xberg_version"] = str(manifest.get("xberg_version") or "")
-    state["models"] = state_models
-    state_partial = _write_release_state_partial(state)
-    try:
-        os.replace(str(state_partial), str(runtime_paths.xberg_release_state_path()))
-    except OSError:
-        state_partial.unlink(missing_ok=True)
-        raise
-    return resolved
-
-
-def _resolved_model_asset(
-    asset: Mapping[str, Any], models: Mapping[str, Mapping[str, Any]]
-) -> Dict[str, Any]:
-    resolved = models.get(str(asset["id"]))
-    if resolved is None:
-        raise InstallError("Xberg 动态模型未解析：{}".format(asset["id"]))
-    return dict(resolved)
-
-
-def _resolve_model_assets_for_install(
-    assets: Sequence[Mapping[str, Any]],
-) -> Dict[str, Dict[str, Any]]:
-    dynamic = [asset for asset in assets if asset["kind"] == "xberg_manifest_model"]
-    return {
-        str(asset["id"]): asset
-        for asset in resolve_xberg_manifest_models(dynamic)
-    }
 
 def _validation_error(
     asset: Mapping[str, Any], source_url: str, actual_size: int, actual_digest: Optional[str]
@@ -687,7 +713,7 @@ def install_asset(
     sleep: Callable[[float], None] = time.sleep,
 ) -> bool:
     """Install one manifest asset; return True when an existing file was reused."""
-    if asset["kind"] == "github_release_zip_member":
+    if asset["kind"] == "github_release_zip_tree":
         if mirror_url:
             raise InstallError(
                 "Xberg 最新发布解析不访问显式资产镜像；"
@@ -748,13 +774,7 @@ def install_asset(
 def install_assets(
     assets: Iterable[Mapping[str, Any]], mirror_url: Optional[str] = None
 ) -> None:
-    ordered = list(assets)
-    resolved_models: Optional[Dict[str, Dict[str, Any]]] = None
-    for asset in ordered:
-        if asset["kind"] == "xberg_manifest_model":
-            if resolved_models is None:
-                resolved_models = _resolve_model_assets_for_install(ordered)
-            asset = _resolved_model_asset(asset, resolved_models)
+    for asset in assets:
         install_asset(asset, mirror_url=mirror_url)
 
 

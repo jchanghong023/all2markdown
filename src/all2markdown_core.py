@@ -382,10 +382,29 @@ def verify_assets() -> None:
         expected_size = int(asset["size_bytes"])
         if not path.is_file():
             issues.append(f"{asset['id']}: {path}（缺失）")
-        elif path.stat().st_size != expected_size:
+        elif expected_size >= 0 and path.stat().st_size != expected_size:
             issues.append(
                 f"{asset['id']}: {path}（大小 {path.stat().st_size}，预期 {expected_size}）"
             )
+        if asset.get("kind") != "github_release_zip_tree":
+            continue
+        runtime_root = path.parent
+        if not (runtime_root / "onnxruntime.dll").is_file():
+            issues.append(f"{asset['id']}: {runtime_root / 'onnxruntime.dll'}（缺失）")
+        if not (runtime_root / "models").is_dir():
+            issues.append(f"{asset['id']}: {runtime_root / 'models'}（缺失）")
+        for entry in asset.get("tree_files") or []:
+            rel = str(entry.get("path") or "")
+            if not rel:
+                continue
+            member = runtime_root.joinpath(*rel.split("/"))
+            size = int(entry.get("size_bytes") or -1)
+            if not member.is_file():
+                issues.append(f"{asset['id']}: {member}（缺失）")
+            elif size >= 0 and member.stat().st_size != size:
+                issues.append(
+                    f"{asset['id']}: {member}（大小 {member.stat().st_size}，预期 {size}）"
+                )
     if issues:
         print(
             "初始化资产不完整或大小不符:\n  "
