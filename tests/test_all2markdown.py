@@ -153,19 +153,14 @@ class ConvertDocsIntegrationTest(unittest.TestCase):
         for rel in expected:
             md = self.output_dir / rel
             self.assertTrue(md.is_file(), f"missing output {rel}")
-            text = md.read_text(encoding="utf-8")
-            self.assertNotIn("![", text, f"image reference leaked into {rel}")
-            self.assertNotIn("images/", text, f"image dir leaked into {rel}")
 
         self.assertFalse((self.output_dir / "bad_docx.md").exists())
 
         hello_md = (self.output_dir / "hello_png.md").read_text(encoding="utf-8")
         self.assertIn("Hello World", hello_md, "image OCR text missing from markdown")
-        self.assertEqual(
-            hello_md,
-            "---\n```text\nHello World\n```\n---\n",
-            "image OCR must be one literal block without line/word duplication",
-        )
+        # Pass-through rendering: Xberg content is kept verbatim (no literal
+        # ```text wrapper) and ends with exactly one trailing newline.
+        self.assertEqual(hello_md, "## Hello World\n")
 
         # DOCX embeddings are scanned on the URI path; both OOXML children recurse.
         doc_embed_md = (self.output_dir / "embed_office_doc_docx.md").read_text(encoding="utf-8")
@@ -184,6 +179,9 @@ class ConvertDocsIntegrationTest(unittest.TestCase):
 
         scanned_md = (self.output_dir / "scanned_pdf.md").read_text(encoding="utf-8")
         self.assertIn("invoice", scanned_md.lower(), "scanned pdf OCR text missing")
+        # The scanned page's image path line is preserved even though the
+        # referenced file does not exist (no placeholder stripping anymore).
+        self.assertIn("![](image_0.png)", scanned_md)
 
         # MP4/M4A routing: transcribed locally, never sent to Xberg.
         if MP4_DEPS_OK:
@@ -221,30 +219,36 @@ class ConvertDocsIntegrationTest(unittest.TestCase):
         self.assertFalse(out.exists(), "invalid config must not create output dir")
 
 
-class StripImagePlaceholdersTest(unittest.TestCase):
-    def test_standalone_reference_removed(self) -> None:
-        text = "before\n![img](image_1.png)\nafter\n"
-        self.assertEqual(all2markdown.strip_image_placeholders(text), "before\nafter\n")
+class ImageReferencePreservationTest(unittest.TestCase):
+    """Post-process simplification: image path lines are never deleted.
 
-    def test_escaped_reference_removed(self) -> None:
-        text = "before\n\\![](../media/image17.png)\nafter\n"
-        self.assertEqual(all2markdown.strip_image_placeholders(text), "before\nafter\n")
+    Even when the referenced file does not exist, the path line must survive
+    so readers can see an image existed at that spot.
+    """
 
-    def test_multiple_references_on_one_line_removed(self) -> None:
-        text = "![a](1.png) ![b](2.emf)\nkept\n"
-        self.assertEqual(all2markdown.strip_image_placeholders(text), "kept\n")
+    def test_standalone_reference_kept(self) -> None:
+        text = all2markdown.build_final_markdown(
+            {"content": "before\n![img](image_1.png)\nafter"}
+        )
+        self.assertEqual(text, "before\n![img](image_1.png)\nafter\n")
 
-    def test_inline_reference_in_text_kept(self) -> None:
-        text = "see ![alt](x.png) in this sentence\n"
-        self.assertEqual(all2markdown.strip_image_placeholders(text), text)
+    def test_escaped_reference_kept(self) -> None:
+        text = all2markdown.build_final_markdown(
+            {"content": "before\n\\![](../media/image17.png)\nafter"}
+        )
+        self.assertEqual(text, "before\n\\![](../media/image17.png)\nafter\n")
 
-    def test_reference_inside_backtick_fence_kept(self) -> None:
-        text = "```md\n![alt](x.png)\n```\n"
-        self.assertEqual(all2markdown.strip_image_placeholders(text), text)
+    def test_line_of_only_references_kept(self) -> None:
+        text = all2markdown.build_final_markdown(
+            {"content": "![a](1.png) ![b](2.emf)\nkept"}
+        )
+        self.assertEqual(text, "![a](1.png) ![b](2.emf)\nkept\n")
 
-    def test_reference_inside_tilde_fence_kept(self) -> None:
-        text = "~~~\n![alt](x.png)\n~~~\n![gone](y.png)\n"
-        self.assertEqual(all2markdown.strip_image_placeholders(text), "~~~\n![alt](x.png)\n~~~\n")
+    def test_text_fence_kept(self) -> None:
+        text = all2markdown.build_final_markdown(
+            {"content": "```text\nraw ocr line\n```"}
+        )
+        self.assertEqual(text, "```text\nraw ocr line\n```\n")
 
 
 class NormalizeMarkdownTest(unittest.TestCase):
@@ -260,16 +264,13 @@ class NormalizeMarkdownTest(unittest.TestCase):
 
     def test_inline_code_untouched(self) -> None:
         text = "Use `a == b && c == d&#32;` and ==yellow highlight==."
-        self.assertEqual(
-            all2markdown.normalize_markdown(text),
-            "Use `a == b && c == d&#32;` and yellow highlight.",
-        )
+        self.assertEqual(all2markdown.normalize_markdown(text), text)
 
 
-    def test_highlight_markers_removed(self) -> None:
+    def test_highlight_markers_preserved(self) -> None:
         self.assertEqual(
             all2markdown.normalize_markdown("Some ==yellow highlight== here."),
-            "Some yellow highlight here.",
+            "Some ==yellow highlight== here.",
         )
 
     def test_dropcap_paragraph_rejoined(self) -> None:
@@ -384,8 +385,10 @@ class EmbeddedPackageFilteringTest(unittest.TestCase):
         text = all2markdown.build_final_markdown(doc)
 
         self.assertIn("## Embedded document: scans/page.jp2", text)
-        self.assertIn("```text\n## Cell\n```", text)
-        self.assertEqual(text.count("## Cell"), 1)
+        # Embedded children render through the same pass-through assembler:
+        # content verbatim (duplicates kept, no literal wrapper).
+        self.assertNotIn("```text", text)
+        self.assertEqual(text.count("## Cell"), 2)
 
 
 class SpatialOcrLayoutTest(unittest.TestCase):
@@ -436,26 +439,46 @@ class SpatialOcrLayoutTest(unittest.TestCase):
         )
 
     def test_markdown_punctuation_from_image_ocr_is_literal(self) -> None:
-        text = all2markdown.build_final_markdown(
-            {"content": "## Cell\n\n---"},
-            image_input=True,
-        )
-        self.assertEqual(text, "---\n```text\n## Cell\n\n---\n```\n---\n")
+        text = all2markdown.build_final_markdown({"content": "## Cell\n\n---"})
+        self.assertEqual(text, "## Cell\n\n---\n")
 
-    def test_repeated_spatial_ocr_blocks_are_preserved(self) -> None:
+    def test_non_empty_content_wins_over_ocr_elements(self) -> None:
+        # Rendering contract: when content is non-empty, ocr_elements never
+        # replace it (the geometry rebuild is only an empty-content fallback).
         elements = [
-            self._box("COPY", 10, 10, 80, 30),
-            self._box("COPY", 10, 100, 80, 120),
+            self._box("REBUILT", 10, 10, 90, 30),
+            self._box("REBUILT", 10, 100, 90, 130),
         ]
         text = all2markdown.build_final_markdown(
             {
-                "content": "COPY\n\nCOPY\n\nCOPY\n\nCOPY",
+                "content": "COPY\n\nCOPY",
                 "ocr_elements": elements,
-            },
-            image_input=True,
+            }
         )
-        self.assertIn("COPY\n\nCOPY", text)
-        self.assertEqual(text.count("COPY"), 2)
+        self.assertEqual(text, "COPY\n\nCOPY\n")
+
+    def test_extraction_method_does_not_change_rendering(self) -> None:
+        elements = [
+            self._box("Signal", 10, 10, 70, 20),
+            self._box("Value", 150, 10, 200, 20),
+        ]
+        for method in (None, "ocr_only", "ocr", "native"):
+            doc: dict[str, object] = {"content": "", "ocr_elements": elements}
+            if method is not None:
+                doc["extraction_method"] = method
+            with self.subTest(method=method):
+                # Empty content always takes the geometric rebuild fallback.
+                self.assertEqual(
+                    all2markdown.build_final_markdown(doc),
+                    "Signal        Value\n",
+                )
+        # A non-empty content wins regardless of the declared method.
+        self.assertEqual(
+            all2markdown.build_final_markdown(
+                {"content": "native text", "extraction_method": "ocr_only"}
+            ),
+            "native text\n",
+        )
 
     def test_code_columns_and_long_line_are_not_wrapped(self) -> None:
         elements = [
@@ -474,8 +497,10 @@ class SpatialOcrLayoutTest(unittest.TestCase):
         markdown = all2markdown.build_final_markdown(
             {"content": "", "extraction_method": "ocr", "ocr_elements": elements}
         )
-        self.assertTrue(markdown.startswith("---\n```text\n"))
-        self.assertTrue(markdown.endswith("\n```\n---\n"))
+        # Empty content + ocr_elements rebuilds geometry without any literal
+        # ```text wrapper; extraction_method must not change the path.
+        self.assertEqual(markdown, text + "\n")
+        self.assertNotIn("```text", markdown)
         self.assertIn("Signal        Value      Status", markdown)
 
         long_line = "LOG " + ("x" * 200)
@@ -483,20 +508,20 @@ class SpatialOcrLayoutTest(unittest.TestCase):
         self.assertEqual(long_text, long_line)
 
 
-class CollapseWholeDocumentDuplicateTest(unittest.TestCase):
-    def test_duplicated_halves_collapsed(self) -> None:
-        self.assertEqual(
-            all2markdown.collapse_whole_document_duplicate("Hello World\n\nHello World\n"),
-            "Hello World\n",
+class DuplicateContentPreservationTest(unittest.TestCase):
+    """Whole-document duplicate OCR blocks are no longer collapsed."""
+
+    def test_duplicated_halves_preserved(self) -> None:
+        text = all2markdown.build_final_markdown(
+            {"content": "Hello World\n\nHello World\n"}
         )
+        self.assertEqual(text, "Hello World\n\nHello World\n")
 
-    def test_multiblock_duplicate_collapsed(self) -> None:
-        text = "one\n\ntwo\n\none\n\ntwo\n"
-        self.assertEqual(all2markdown.collapse_whole_document_duplicate(text), "one\n\ntwo\n")
-
-    def test_asymmetric_text_untouched(self) -> None:
-        text = "one\n\ntwo\n\nthree\n"
-        self.assertEqual(all2markdown.collapse_whole_document_duplicate(text), text)
+    def test_multiblock_duplicate_preserved(self) -> None:
+        text = all2markdown.build_final_markdown(
+            {"content": "one\n\ntwo\n\none\n\ntwo\n"}
+        )
+        self.assertEqual(text, "one\n\ntwo\n\none\n\ntwo\n")
 
 
 class FormatRoutingTest(unittest.TestCase):
@@ -556,7 +581,7 @@ class FormatRoutingTest(unittest.TestCase):
             limit, all2markdown_core.XBERG_DEFAULT_MAX_REQUEST_BODY_BYTES
         )
 
-    def test_advanced_image_output_collapses_duplicate_ocr(self) -> None:
+    def test_advanced_image_output_preserves_duplicate_ocr(self) -> None:
         input_dir = self.tmp / "input"
         output_dir = self.tmp / "output"
         input_dir.mkdir()
@@ -574,7 +599,8 @@ class FormatRoutingTest(unittest.TestCase):
                 text = (output_dir / f"scan_{extension[1:]}.md").read_text(
                     encoding="utf-8"
                 )
-                self.assertEqual(text.count("Hello World"), 1)
+                # Duplicate OCR blocks are preserved verbatim (no collapsing).
+                self.assertEqual(text.count("Hello World"), 2)
 
     def test_nested_output_tree_is_not_rescanned(self) -> None:
         input_dir = self.tmp / "input"

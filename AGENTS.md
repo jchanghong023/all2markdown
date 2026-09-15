@@ -9,7 +9,7 @@
 - `src/all2markdown_core.py` 负责递归扫描、跳过已有输出、路由、Xberg 服务生命周期、结果组织、日志、错误隔离和原子落盘。
 - 文档解析、OCR、Layout/Table、嵌入文档递归全部由固定版本 Xberg 完成；不得在本项目内实现 Office/PDF 解析器。
 - `.mp4` / `.m4a` 路由到 `src/convert_mp4.py` 的本地 PyAV + Silero VAD + SenseVoice INT8 链路；该文件是内部实现模块，不是第二个产品入口。
-- 每个顶层输入只生成一份 Markdown，嵌入内容合并到同一文件；不得生成图片文件、Base64 或 Markdown 图片引用。
+- 每个顶层输入只生成一份 Markdown，嵌入内容合并到同一文件；不得生成图片文件、Base64，但必须保留 Xberg 输出的图片路径引用（含无真实文件的占位路径），以标记原文图片位置。
 
 ## 平台、安装与离线要求
 

@@ -199,8 +199,7 @@ EXT_TO_MIME = {
 # consistently performs embedded-document scanning.
 BYTES_INPUT_EXTENSIONS = {".pptx", ".pptm", ".ppsx", ".potx", ".potm"}
 
-# Inputs handled by Xberg's raster ImageExtractor. Only these get the
-# whole-document OCR duplicate collapse (see collapse_whole_document_duplicate).
+# Inputs handled by Xberg's raster ImageExtractor.
 IMAGE_EXTENSIONS = {
     ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff",
     ".jp2", ".j2k", ".j2c", ".jpx", ".jpm", ".mj2", ".jbig2", ".jb2",
@@ -676,10 +675,7 @@ def _collect_children(
         if not isinstance(result, dict):
             continue
         display = f"{prefix}/{rel_path}" if prefix else rel_path
-        content = _render_document_root(
-            result,
-            image_input=Path(rel_path).suffix.lower() in IMAGE_EXTENSIONS,
-        )
+        content = _render_document_root(result)
         if _is_visio_page_part(display):
             content = _extract_visio_page_text(content)
         elif _is_ooxml_internal_part(display):
@@ -695,49 +691,15 @@ def _collect_children(
     return out
 
 
-# Standalone image references (whole line is one or more ![alt](src) tokens;
-# Xberg's escape_markdown may escape the leading bang as \!).
-_IMAGE_PLACEHOLDER_LINE = re.compile(r"^\s*(?:\\?!\[[^\]]*\]\([^)]*\)\s*)+$")
 # Code fence delimiter (up to 3 leading spaces per CommonMark).
 _FENCE_DELIMITER = re.compile(r"^\s{0,3}(```|~~~)")
 _BACKTICK_RUN = re.compile(r"`+")
 # Numeric character references emitted by Xberg's comrak serializer for
 # non-standard whitespace (&#9; tab, &#32; space, &#160; nbsp, ...).
 _NUMERIC_ENTITY = re.compile(r"&#(?:[xX]([0-9A-Fa-f]+)|(\d+));")
-# Obsidian-style highlight markers Xberg emits for Word text highlights.
-_HIGHLIGHT_MARKERS = re.compile(r"==([^=\n]+)==")
 # A paragraph that is exactly one ASCII letter: a Word dropcap rendered as
 # its own paragraph (w:framePr w:dropCap is not interpreted by Xberg).
 _DROPCAP_PARAGRAPH = re.compile(r"^[A-Za-z]$")
-
-
-def strip_image_placeholders(text: str) -> str:
-    """Drop standalone image-reference lines, honoring code fences.
-
-    Xberg renders an ``![name](image_N.ext)`` placeholder (possibly
-    bang-escaped as ``\\!`` by escape_markdown) for images it can neither
-    parse nor OCR (empty/undecodable data, EMF, ...). Project rule forbids
-    image references in output, so placeholder-only lines are removed;
-    inline references inside real text and anything inside code fences stay.
-    Newer Xberg keeps image path + OCR text in one fenced block — those
-    path lines are preserved as part of the block.
-    """
-    out_lines: list[str] = []
-    fence: str | None = None
-    for line in text.split("\n"):
-        delimiter = _FENCE_DELIMITER.match(line)
-        if delimiter:
-            marker = delimiter.group(1)
-            if fence is None:
-                fence = marker
-            elif marker == fence:
-                fence = None
-            out_lines.append(line)
-            continue
-        if fence is None and _IMAGE_PLACEHOLDER_LINE.match(line):
-            continue
-        out_lines.append(line)
-    return "\n".join(out_lines)
 
 
 def _decode_numeric_entity(match: re.Match[str]) -> str:
@@ -759,8 +721,7 @@ def _decode_numeric_entity(match: re.Match[str]) -> str:
 
 def _normalize_plain_inline(text: str) -> str:
     text = text.replace("&nbsp;", " ")
-    text = _NUMERIC_ENTITY.sub(_decode_numeric_entity, text)
-    return _HIGHLIGHT_MARKERS.sub(r"\1", text)
+    return _NUMERIC_ENTITY.sub(_decode_numeric_entity, text)
 
 
 def _normalize_inline(line: str) -> str:
@@ -788,8 +749,6 @@ def normalize_markdown(text: str) -> str:
 
     * numeric HTML entities (&#9;, &#32;, &#160;, ...) -> their characters,
       extending the &#10;/&#2; normalization Xberg itself performs;
-    * ``==highlight==`` markers -> plain text (highlight info has no
-      standard Markdown representation);
     * Word dropcap paragraphs (a lone ASCII letter) re-joined with the
       following lowercase-starting paragraph ("D" + "rop caps..." ->
       "Drop caps...").
@@ -851,34 +810,6 @@ def normalize_markdown(text: str) -> str:
             out.extend(paragraph)
             i = end
     return "\n".join(out)
-
-
-def _wrap_ocr_literal(text: str) -> str:
-    """Keep OCR punctuation from becoming Markdown headings or separators."""
-    body = text.rstrip("\n")
-    if not body:
-        return ""
-    longest_backtick_run = max(
-        (len(run) for run in re.findall(r"`+", body)),
-        default=0,
-    )
-    fence = "`" * max(3, longest_backtick_run + 1)
-    return f"---\n{fence}text\n{body}\n{fence}\n---"
-
-
-def collapse_whole_document_duplicate(text: str) -> str:
-    """Drop the repeated second half of a whole-image OCR document.
-
-    Some Xberg image extraction paths can emit OCR text both as paragraphs and
-    as the trailing Image element's OCR text. When the blank-line-separated
-    block sequence is exactly duplicated, keep only the first half.
-    """
-    stripped = text.strip("\n")
-    blocks = stripped.split("\n\n")
-    count = len(blocks)
-    if count >= 2 and count % 2 == 0 and blocks[: count // 2] == blocks[count // 2 :]:
-        return "\n\n".join(blocks[: count // 2]) + "\n"
-    return text
 
 
 # OCR geometry is returned by Xberg as either a rectangle or a quadrilateral.
@@ -1057,28 +988,21 @@ def _document_ocr_elements(doc: dict[str, Any]) -> list[dict[str, Any]]:
     return result
 
 
-def _render_document_root(
-    doc: dict[str, Any], *, image_input: bool = False
-) -> str:
+def _render_document_root(doc: dict[str, Any]) -> str:
     root = str(doc.get("content") or "")
+    # Xberg renders image/scanned-page OCR in place as a path line plus a
+    # ```text fence, and those lines (real path or not) must survive so the
+    # output records where an image existed. The geometry-aware rebuild is
+    # only a fallback for responses that carry OCR elements but no rendered
+    # content; native document text keeps Xberg's Markdown semantics.
     spatial = spatial_ocr_markdown(_document_ocr_elements(doc))
-    # Image/scanned OCR is the only source for these elements. Prefer the
-    # geometry-preserving rendering when present; native document text keeps
-    # Xberg's normal Markdown semantics and is left untouched.
-    extraction_method = str(doc.get("extraction_method") or "").lower()
-    ocr_only = "ocr" in extraction_method and "native" not in extraction_method
-    use_spatial = bool(spatial) and (image_input or not root.strip() or ocr_only)
-    if use_spatial:
+    if not root.strip() and spatial:
         root = spatial
-    if image_input and not use_spatial:
-        root = collapse_whole_document_duplicate(root)
-    if image_input or ocr_only or use_spatial:
-        root = _wrap_ocr_literal(root)
-    return strip_image_placeholders(normalize_markdown(root))
+    return normalize_markdown(root)
 
 
-def build_final_markdown(doc: dict[str, Any], *, image_input: bool = False) -> str:
-    parts: list[str] = [_render_document_root(doc, image_input=image_input)]
+def build_final_markdown(doc: dict[str, Any]) -> str:
+    parts: list[str] = [_render_document_root(doc)]
     seen: set[str] = set()
     root_digest = _content_digest(parts[0])
     if root_digest:
@@ -1091,8 +1015,7 @@ def build_final_markdown(doc: dict[str, Any], *, image_input: bool = False) -> s
         parts.append(content.rstrip())
     # Only trim record separators added by the assembler. Do not call
     # ``strip()`` here: a leading space can be an intentional OCR x-position.
-    text = "\n".join(parts).rstrip("\n") + "\n"
-    return strip_image_placeholders(text)
+    return "\n".join(parts).rstrip("\n") + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -1399,9 +1322,7 @@ def convert_one_result(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = output_path.with_name(f"{output_path.name}.tmp-{uuid.uuid4().hex[:8]}")
     try:
-        markdown = build_final_markdown(
-            result, image_input=input_path.suffix.lower() in IMAGE_EXTENSIONS
-        )
+        markdown = build_final_markdown(result)
         tmp_path.write_text(markdown, encoding="utf-8", newline="\n")
         os.replace(tmp_path, output_path)
     except BaseException:

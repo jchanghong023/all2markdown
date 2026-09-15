@@ -182,7 +182,7 @@ PowerPoint 段落不只有普通 `a:r`。页码、日期等可见内容可能存
 - OCR 成功：输出 OCR 内容；
 - OCR 无文字：不凭空输出 description；
 - OCR 解码失败：保留诊断，不把 description 当正文；
-- 最终不得留下 Markdown 图片引用、Base64 或图片文件。
+- 最终不得留下 Base64 或图片文件。
 
 ## DOCX 结构考虑点
 
@@ -265,7 +265,7 @@ error reason
 - 每个顶层输入只生成一个 Markdown；
 - 图片 OCR 文本出现在对应 shape 的位置附近；
 - 不依赖哈希表或 ZIP 的未定义迭代顺序；
-- 不生成图片文件、Base64 或 Markdown 图片引用；
+- 不生成图片文件或 Base64；
 - 单图片失败不终止顶层文档；
 - 失败不留下不完整最终文件；
 - OLE 本体失败与 preview OCR 分别报告；
@@ -295,7 +295,7 @@ FIELD_003
 7. PPTX：SVG；
 8. PPTX：普通 run 与 `a:fld` 混排，验证字段值不丢失；
 9. PPTX：description 有文本但图片 OCR 为空，最终不输出 description；
-10. PPTX：不可解码图片，产生结构化 warning 且无残留 placeholder；
+10. PPTX：不可解码图片，产生结构化 warning；
 11. PPTX：OLE 本体不支持但 preview 可 OCR，分别验证 warning 和可见文本；
 12. DOCX：正文、页眉、页脚、脚注、尾注分别引用图片；
 13. DOCX：EMF、WMF 与普通栅格图片混排，单图失败隔离；
@@ -311,7 +311,7 @@ FIELD_003
 23. Excel 家族：XLSX、XLTX、XLSM、XLSB、XLAM 的入口、工作表和 drawing 行为；
 24. 媒体链：MP4、M4A 的离线本地转录与错误隔离；
 25. 运行时其他格式：对固定 Xberg `/formats` 清单做公开无敏感内容的最小烟测；
-26. 所有格式：最终 Markdown 不含图片链接、Base64 或生成图片路径。
+26. 所有格式：最终 Markdown 不含 Base64 或生成的图片文件。
 
 涉及真实 OCR 的夹具应使用清晰、高对比度、固定字体和唯一短字符串；顺序测试应优先注入确定性的假 OCR 后端或固定 OCR 结果，避免把模型精度波动误判为关联逻辑错误。真实后端集成测试另行验证像素解码和 OCR 端到端行为。
 
