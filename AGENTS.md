@@ -41,6 +41,21 @@
 
 测试依赖的真实资产缺失时会跳过真实 Xberg / 媒体模型用例；需要得到真实结论时必须先运行 `init.cmd`，不得把跳过当成通过。
 
+### 三级测试门（`tools/test_gate.py`）
+
+三个标准测试入口与 Agent 执行权限边界（语义固定，不得按任务随意改变）：
+
+| 层级 | 命令 | 范围 | 权限 |
+| --- | --- | --- | --- |
+| `fastcheck.cmd` | 语法检查 + 除真实集成类外的全部单元/轻量用例 | 墙钟硬上限 60 秒（`--budget` 只允许下调）；超时终止进程树并返回失败 | AI Agent 可自主执行 |
+| `fulltest.cmd --authorized` | 当前平台完整本地验证：`compileall` + 全量 `unittest discover`（含真实 Xberg 转换与真实 ASR，`ALL2MARKDOWN_REQUIRE_REAL_CONVERSION=1`，与 CI 本地步骤一致） | 不跨 WSL、不触发远程流水线 | 每次必须有人类明确授权 |
+| `slowtest.cmd --authorized` | fulltest 全部语义 + 触发 `full-tests.yml` 的 workflow_dispatch 远程 CI 并等待最终结论 | 本地提交未推送时该阶段报 UNVERIFIED，不自动 push；不创建 tag/release | 每次必须有人类明确授权 |
+
+- `--authorized` 只能来自人类针对本次运行的明确指令原文，AI 不得自行添加（软约束）。
+- fastcheck 排除的真实集成类清单在 `tools/test_gate.py` 的 `HEAVYWEIGHT_CLASSES`；新增轻量测试类自动纳入 fastcheck。
+- `fulltest.py`（根目录）是手动真实语料验收脚本，与 `fulltest.cmd` 测试门是两个不同入口，勿混淆。
+- 各层级每次运行都输出总耗时；fastcheck 通过不代表完整验证。
+
 ## 平台、安装与离线约束
 
 - 仅支持 Windows 11 x64、纯 CPU、AVX2。初始化可使用预装的 Windows x64 Python 3.8+；产品执行固定使用 uv 管理的 Python 3.12 和项目 `.venv`。
